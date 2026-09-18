@@ -21,9 +21,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone as _tz
-from typing import List, Optional, Dict, Sequence
+from typing import List, Optional, Dict
 
 try:
     from skyfield.api import load, EarthSatellite, wgs84, utc

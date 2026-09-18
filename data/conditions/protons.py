@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from statistics import median
 from typing import List, Dict, Optional, Sequence, Iterable
