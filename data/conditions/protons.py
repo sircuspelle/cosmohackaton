@@ -17,8 +17,8 @@ from datetime import datetime
 from statistics import median
 from typing import List, Dict, Optional, Sequence, Iterable
 
-from ..window import Window
-
+from data.window import Window
+import math  # убедись, что math импортирован в начале файла
 
 @dataclass
 class ProtonPoint:
@@ -32,16 +32,29 @@ class ProtonPoint:
     l_shell: Optional[float] = None
 
     def has_position(self) -> bool:
+        """True, если заполнены все нужные координаты."""
         return (self.lat_deg is not None and
                 self.lon_deg is not None and
                 self.alt_km is not None and
                 self.mag_lat_deg is not None)
 
     def is_finite(self) -> bool:
-        return (math.isfinite(self.flux) and
-                all(v is None or math.isfinite(v)
-                    for v in (self.lat_deg, self.lon_deg, self.alt_km,
-                              self.mag_lat_deg, self.l_shell)))
+        """True, если все числовые поля конечны (не NaN, не inf)."""
+        try:
+            if not math.isfinite(float(self.flux)):
+                return False
+        except (TypeError, ValueError):
+            return False
+        for v in (self.lat_deg, self.lon_deg, self.alt_km,
+                  self.mag_lat_deg, self.l_shell):
+            if v is None:
+                continue
+            try:
+                if not math.isfinite(float(v)):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
 
 class GeomagneticModel:
@@ -331,12 +344,20 @@ class TrajectoryAwareProtonCalculator:
                 if window.start <= p.time <= window.end]
 
     @staticmethod
-    def _validate_and_sort(pts: List[ProtonPoint]
-                           ) -> List[ProtonPoint]:
-        clean = [p for p in pts if p.is_finite() and p.flux >= 0]
+    def _validate_and_sort(pts: List[ProtonPoint]) -> List[ProtonPoint]:
+        """Фильтрует некорректные точки и сортирует по времени."""
+        clean = []
+        for p in pts:
+            # Защита от None и отрицательных/NaN значений
+            try:
+                flux = float(p.flux)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(flux) or flux < 0:
+                continue
+            clean.append(p)
         clean.sort(key=lambda x: x.time)
         return clean
-
     @staticmethod
     def _median_step(pts: List[ProtonPoint]) -> float:
         if len(pts) < 2:

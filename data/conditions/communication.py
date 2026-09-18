@@ -406,7 +406,7 @@ class CommCalculator:
         ts, eph = cls._get_ts_eph()
         sat = EarthSatellite(tle_line1, tle_line2, satellite_name, ts)
 
-        # Предсоздаём wgs84-точки для станций
+        # Топоцентрические наблюдатели (БЕЗ earth +)
         station_points = [
             (st, wgs84.latlon(st.lat_deg, st.lon_deg, st.alt_m))
             for st in stations
@@ -418,14 +418,12 @@ class CommCalculator:
         current = window.start
         while current <= window.end:
             t = ts.from_datetime(_ensure_utc(current))
-            sat_at = sat.at(t)
 
             best: Optional[CommSample] = None
             best_elev = -90.0
 
             for st, obs in station_points:
-                difference = sat_at - obs
-                topocentric = difference.at(t)
+                topocentric = (sat - obs).at(t)
                 alt, az, distance = topocentric.altaz()
                 elev = alt.degrees
                 dist_km = distance.km
