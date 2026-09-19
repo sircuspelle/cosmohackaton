@@ -27,11 +27,13 @@
         <section class="control-panel panel">
           <div class="panel-heading"><div><span class="section-kicker">01 / ЗАПРОС</span><h2>Параметры миссии</h2></div><button class="ghost-button" id="reloadButton">↻ Обновить данные</button></div>
           <div class="controls-grid">
-            <label>Начало сеанса<input id="startInput" type="datetime-local" value="2024-05-10T12:00" /></label>
+            <label>Начало сеанса<input id="startInput" type="datetime-local" /></label>
             <label>Длительность<select id="durationInput"><option value="2">2 часа</option><option value="4">4 часа</option><option value="6" selected>6 часов</option><option value="8">8 часов</option></select></label>
             <label>Режим данных<select id="modeInput"><option value="reconstruction" selected>Историческая реконструкция</option><option value="live">Текущие данные</option><option value="as_of">Строгий replay</option></select></label>
             <button class="primary-button" id="assessButton">Оценить окна <span>→</span></button>
           </div>
+          <p id="modeDescription" class="mode-desc"></p>
+          <label class="force-label"><input type="checkbox" id="forceInsufficient" /> Принять к сведению недостаточные данные и рассчитать</label>
         </section>
 
         <section class="summary-grid" id="summarySection">

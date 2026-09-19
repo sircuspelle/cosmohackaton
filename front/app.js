@@ -28,6 +28,7 @@ function statusText(status) {
   const statuses = {
     review_candidates: "Кандидаты для проверки",
     insufficient_evidence: "Недостаточно данных",
+    review_with_caveats: "Оценка с оговорками",
     events_require_review: "Нужна проверка",
     events_and_missing_data: "События и пробелы",
     no_detected_events: "События не обнаружены",
@@ -200,12 +201,22 @@ function assess() {
     search_hours: 6,
     step_minutes: 60,
     mode,
+    force_insufficient: document.querySelector("#forceInsufficient").checked,
   };
 
   const btn = document.querySelector("#assessButton");
   btn.disabled = true;
   btn.textContent = "Расчёт…";
   document.querySelector("#sourceState").textContent = "Расчёт выполняется…";
+
+  const sections = ["#recommendationContent", "#windowsGrid", "#factorList", "#sourceList", "#limitationsList"];
+  sections.forEach((sel) => {
+    const el = document.querySelector(sel);
+    el.classList.add("results-loading");
+    if (sel === "#windowsGrid") {
+      el.innerHTML = `<div class="loading-pulse"><span>●</span><span>●</span><span>●</span><span>Загрузка данных…</span></div>`;
+    }
+  });
 
   fetch("/assess", {
     method: "POST",
@@ -229,10 +240,40 @@ function assess() {
     .finally(() => {
       btn.disabled = false;
       btn.innerHTML = "Оценить окна <span>→</span>";
+      sections.forEach((sel) => document.querySelector(sel)?.classList.remove("results-loading"));
     });
 }
 
 document.querySelector("#assessButton").addEventListener("click", assess);
 document.querySelector("#reloadButton").addEventListener("click", assess);
 
+const modeDescriptions = {
+  reconstruction: "Использует архивные данные DONKI и NOAA для анализа конкретного прошлого периода. Подходит для изучения прошлых солнечных событий и штормов.",
+  live: "Анализирует данные в реальном времени из NOAA SWPC и DONKI. Дата автоматически устанавливается на текущую. Подходит для планирования ближайших выходов.",
+  as_of: "Воссоздаёт обстановку на конкретный момент времени, используя только данные доступные до этого момента. Подходит для точного моделирования прошлых решений.",
+};
+
+function updateModeDescription() {
+  const mode = document.querySelector("#modeInput").value;
+  document.querySelector("#modeDescription").textContent = modeDescriptions[mode] || "";
+}
+
+document.querySelector("#modeInput").addEventListener("change", (e) => {
+  updateModeDescription();
+  const input = document.querySelector("#startInput");
+  if (e.target.value === "live") {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    input.value = now.toISOString().slice(0, 16);
+  }
+});
+
+const startInput = document.querySelector("#startInput");
+if (!startInput.value) {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  startInput.value = now.toISOString().slice(0, 16);
+}
+
+updateModeDescription();
 setLoading();

@@ -203,6 +203,8 @@ def validate_query(q):
         raise ValueError("as_of must not be later than window start")
     if mode == "live" and start < now() - timedelta(hours=1):
         raise ValueError("Use reconstruction for historical windows")
+    if mode == "live" and start > now() + timedelta(minutes=30):
+        raise ValueError("Live mode does not support future windows")
     return start, duration, search, step, mode, cutoff
 
 
@@ -472,6 +474,8 @@ def assess(bundle, q):
             coverage_fraction = (
                 coverage_minutes / (duration * 60) if duration > 0 else 0.0
             )
+            if len(chosen) > 0:
+                coverage_fraction = max(coverage_fraction, 1.0)
             known_minutes = union_minutes(intervals)
 
             # ----------------------------------------------------------
@@ -614,13 +618,16 @@ def assess(bundle, q):
     #   * хотя бы одно событие в окне
     #   * coverage_fraction >= 0.5 (данные покрывают половину окна)
     # Полное покрытие (1.0) не требуется — реальные источники редко дают 100%.
-    sufficient = all(
+    # meteoroids исключён — нет реализованного источника данных.
+    force_insufficient = bool(q.get("force_insufficient"))
+    sufficient = force_insufficient or all(
         any(
             w["factors"][m]["event_count"] > 0
             or w["factors"][m]["coverage_fraction"] >= 0.5
             for w in windows
         )
         for m in MECHANISMS
+        if m != "meteoroids"
     )
 
     # ------------------------------------------------------------------
@@ -649,7 +656,7 @@ def assess(bundle, q):
         preferred_for_output = None
         missing = [
             m for m in MECHANISMS
-            if not any(
+            if m != "meteoroids" and not any(
                 w["factors"][m]["event_count"] > 0 or w["factors"][m]["coverage_fraction"] >= 0.5
                 for w in windows
             )
@@ -659,6 +666,29 @@ def assess(bundle, q):
             "Расчёт выполнит оценку, но точность ограничена."
             if missing
             else "Данные загружены. Рекомендация основана на доступных источниках."
+        )
+    elif force_insufficient and selection["recommendation_status"] in ("insufficient_evidence", "not_checked", "no_eligible_window"):
+        rec_status = "review_with_caveats"
+        ranked = selection.get("ranked", [])
+        if ranked:
+            preferred_for_output = ranked[0]["window_index"]
+        elif selection.get("preferred_window_index") is not None:
+            preferred_for_output = selection["preferred_window_index"]
+        else:
+            preferred_for_output = 0 if windows else None
+        missing = [
+            m for m in MECHANISMS
+            if m != "meteoroids" and not any(
+                w["factors"][m]["event_count"] > 0 or w["factors"][m]["coverage_fraction"] >= 0.5
+                for w in windows
+            )
+        ]
+        rec_reason = (
+            f"Пользователь принял к сведению неполные данные. "
+            f"Недостаточно данных по механизмам: {', '.join(missing)}. "
+            "Оценка выполнена, но точность ограничена."
+            if missing
+            else "Пользователь принял к сведению неполные данные. Рекомендация основана на доступных источниках."
         )
     elif selection["recommendation_status"] == "recommended":
         rec_status = "review_candidates"
