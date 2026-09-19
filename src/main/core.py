@@ -116,20 +116,74 @@ def latest_events(events):
 
 
 def group_count(events):
-    # Transitive source-declared links; this is NOT a count of independent hazards.
+    """
+    Считает число независимых групп событий.
+
+    Два события попадают в одну группу, если они связаны через
+    общий related_id (прямо или транзитивно), даже если сам related_id
+    не входит в `events` (например, context_only CME).
+
+    Гарантии:
+      * Транзитивность: A→X, B→X,Y, C→Y ⇒ A, B, C в одной группе.
+      * Отсутствующий related_ids не ломает группировку.
+      * None, пустые строки и дубликаты в related_ids игнорируются.
+      * Каждое событие учитывается ровно один раз.
+    """
+    # Union-Find по всем узлам (события + related_ids).
     parent = {}
 
     def find(x):
-        parent.setdefault(x, x)
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
+        # Итеративный path compression (без рекурсии — избегаем
+        # RecursionError на длинных цепочках).
+        root = x
+        while parent.get(root, root) != root:
+            root = parent[root]
+        while parent.get(x, x) != root:
+            parent[x], x = root, parent[x]
+        return root
 
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    def _clean_ids(values):
+        """Убирает None, пустые строки, дубликаты. Сохраняет порядок."""
+        if not values:
+            return []
+        seen = set()
+        out = []
+        for v in values:
+            if not isinstance(v, str):
+                continue
+            v = v.strip()
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            out.append(v)
+        return out
+
+    # Первый проход: регистрируем все узлы и объединяем.
+    event_ids = []
     for e in events:
-        root = find(e["id"])
-        for other in e["related_ids"]:
-            parent[find(other)] = root
-    return len({find(e["id"]) for e in events})
+        eid = e.get("id")
+        if not isinstance(eid, str) or not eid:
+            # Событие без id не может быть в группе — пропускаем,
+            # но это не должно происходить в норме.
+            continue
+        event_ids.append(eid)
+        find(eid)  # регистрируем узел
+
+        related = _clean_ids(e.get("related_ids"))
+        for other in related:
+            union(eid, other)
+
+    if not event_ids:
+        return 0
+
+    # Второй проход: считаем уникальные корни среди id событий.
+    roots = {find(eid) for eid in event_ids}
+    return len(roots)
 
 
 def validate_query(q):
@@ -192,16 +246,44 @@ def check_requirements(window, requirements=None):
                 else ("pass" if value >= min_cov else "fail"),
             }
         )
+
+    if not checks:
+        # Требования не заданы — это не "pass", это "не проверялось".
+        return {
+            "passed": False,
+            "status": "not_checked",
+            "checks": [],
+            "reason": "No requirements were provided for this window.",
+        }
+
+    statuses = {x["status"] for x in checks}
+    if "unknown" in statuses:
+        status = "unknown"
+    elif "fail" in statuses:
+        status = "fail"
+    else:
+        status = "pass"
     return {
-        "passed": bool(checks) and all(x["status"] == "pass" for x in checks),
-        "status": "unknown"
-        if any(x["status"] == "unknown" for x in checks)
-        else ("pass" if all(x["status"] == "pass" for x in checks) else "fail"),
+        "passed": status == "pass",
+        "status": status,
         "checks": checks,
     }
 
 
-def select_best_window(windows, requirements=None):
+# core.py — заменить select_best_window()
+
+def select_best_window(windows, requirements=None, allow_unchecked=False):
+    """
+    Ранжирует окна по burden и покрытию.
+
+    preferred_window_index возвращается только если:
+      * требования заданы и хотя бы одно окно проходит, ИЛИ
+      * allow_unchecked=True и есть окно с известным score.
+
+    Иначе preferred_window_index=None, а ranked содержит всю диагностику.
+    """
+    requirements = requirements or {}
+    req_provided = bool(requirements)
     ranked = []
     for i, w in enumerate(windows):
         req = check_requirements(w, requirements)
@@ -213,42 +295,104 @@ def select_best_window(windows, requirements=None):
             (f.get("coverage_fraction", 0) for f in w.get("factors", {}).values()),
             default=0,
         )
-        ranked.append(
-            (
-                req["status"] == "pass",
-                req["status"] == "unknown",
-                burden,
-                -coverage,
-                i,
-                req,
-            )
+        incomplete = any(
+            f.get("status") == "insufficient_data"
+            or f.get("possible_ongoing_event_ids")
+            for f in w.get("factors", {}).values()
         )
-    eligible = [x for x in ranked if x[0]] or (
-        [x for x in ranked if x[1]] if ranked else []
-    )
-    chosen = min(eligible, key=lambda x: (x[2], x[3], x[4])) if eligible else None
-    return {
-        "preferred_window_index": chosen[4] if chosen else None,
-        "reason": "минимальное суммарное пересечение при выполнении требований"
-        if chosen and chosen[0]
-        else "оснований для безопасного выбора недостаточно",
-        "ranked": [
-            {
-                "window_index": x[4],
-                "requirements": x[5],
-                "burden_minutes": x[2],
-                "coverage_fraction": -x[3],
+        ranked.append({
+            "window_index": i,
+            "requirements": req,
+            "burden_minutes": burden,
+            "coverage_fraction": coverage,
+            "incomplete": incomplete,
+        })
+
+    # Сортировка: pass > unknown > fail, затем burden, затем coverage
+    def _key(x):
+        s = x["requirements"]["status"]
+        rank = {"pass": 0, "unknown": 1, "not_checked": 1, "fail": 2}.get(s, 3)
+        return (rank, x["burden_minutes"], -x["coverage_fraction"], x["window_index"])
+
+    ranked.sort(key=_key)
+
+    # Условия для выдачи рекомендации
+    if not ranked:
+        return {
+            "preferred_window_index": None,
+            "reason": "Нет окон для сравнения.",
+            "ranked": [],
+            "recommendation_status": "no_windows",
+        }
+
+    best = ranked[0]
+
+    if req_provided:
+        if best["requirements"]["status"] == "pass":
+            return {
+                "preferred_window_index": best["window_index"],
+                "reason": "Минимальный burden среди окон, прошедших требования.",
+                "ranked": ranked,
+                "recommendation_status": "recommended",
             }
-            for x in sorted(ranked, key=lambda x: (not x[0], not x[1], x[2], x[3]))
-        ],
+        if best["requirements"]["status"] == "unknown":
+            return {
+                "preferred_window_index": None,
+                "reason": "Требования заданы, но данные неполные: статус unknown.",
+                "ranked": ranked,
+                "recommendation_status": "insufficient_evidence",
+            }
+        return {
+            "preferred_window_index": None,
+            "reason": "Ни одно окно не проходит заданные требования.",
+            "ranked": ranked,
+            "recommendation_status": "no_eligible_window",
+        }
+
+    # Требования не заданы
+    if best["incomplete"]:
+        return {
+            "preferred_window_index": None,
+            "reason": "Требования не заданы, данные неполные: рекомендация невозможна.",
+            "ranked": ranked,
+            "recommendation_status": "insufficient_evidence",
+        }
+    if allow_unchecked:
+        return {
+            "preferred_window_index": best["window_index"],
+            "reason": "Требования не заданы; выбран минимальный burden (allow_unchecked).",
+            "ranked": ranked,
+            "recommendation_status": "ranked_without_requirements",
+        }
+    return {
+        "preferred_window_index": None,
+        "reason": "Требования не заданы — рекомендация не выдаётся.",
+        "ranked": ranked,
+        "recommendation_status": "not_checked",
     }
 
 
 def assess(bundle, q):
+    """
+    Считает метрики по окнам и формирует рекомендацию.
+
+    Гарантии:
+      * recommendation.status и recommendation.preferred_window согласованы:
+        preferred_window не выдаётся при insufficient_evidence.
+      * requirements.status = "not_checked", если требования не заданы.
+      * Возраст данных разделён: snapshot_age / event_age / data_lag.
+      * coverage и known_overlap считаются только по доступным данным.
+    """
     start, duration, search, step, mode, cutoff = validate_query(q)
+
+    # ------------------------------------------------------------------
+    # 1. Нормализация событий
+    # ------------------------------------------------------------------
     events = latest_events(bundle["events"])
+
     excluded = 0
     excluded_unknown_publication = 0
+
     if cutoff:
         kept = []
         for e in events:
@@ -270,31 +414,50 @@ def assess(bundle, q):
                 continue
             kept.append(e)
         events = kept
+
+    # ------------------------------------------------------------------
+    # 2. Окна
+    # ------------------------------------------------------------------
     windows = []
-    for i in range(int(search * 60 // step) + 1):
+    n_windows = int(search * 60 // step) + 1
+    now_utc = now()
+
+    for i in range(n_windows):
         a = start + timedelta(minutes=i * step)
         b = a + timedelta(hours=duration)
         factors = {}
+
         for mechanism in MECHANISMS:
             chosen, intervals, unknown = [], [], []
+
             for e in events:
-                if e["mechanism"] != mechanism or e["relevance"] == "context_only":
+                if e["mechanism"] != mechanism:
                     continue
+                if e["relevance"] == "context_only":
+                    continue
+
                 s = dt(e["start"])
                 t = dt(e["end"]) if e["end"] else None
+
                 if e["temporal"] == "instant":
                     hit = a <= s < b
                 elif t:
                     hit = s < b and t > a
                 else:
                     hit = s < b
+
                 if not hit:
                     continue
+
                 chosen.append(e)
                 if t:
                     intervals.append((max(a, s), min(b, t)))
                 elif e["temporal"] != "instant":
                     unknown.append(e["id"])
+
+            # ----------------------------------------------------------
+            # Coverage: только по интервалам, известным на cutoff
+            # ----------------------------------------------------------
             coverage_intervals = []
             for c in bundle.get("coverage", []):
                 if c["mechanism"] != mechanism:
@@ -304,30 +467,72 @@ def assess(bundle, q):
                 coverage_intervals.append(
                     (max(a, dt(c["start"])), min(b, dt(c["end"])))
                 )
-            coverage = union_minutes(coverage_intervals) / (duration * 60)
-            known = union_minutes(intervals)
+
+            coverage_minutes = union_minutes(coverage_intervals)
+            coverage_fraction = (
+                coverage_minutes / (duration * 60) if duration > 0 else 0.0
+            )
+            known_minutes = union_minutes(intervals)
+
+            # ----------------------------------------------------------
+            # Возраст данных: три раздельные метрики
+            # ----------------------------------------------------------
+            if chosen:
+                snap_ages = [
+                    max(0.0, (now_utc - dt(e["fetched_at"])).total_seconds() / 60)
+                    for e in chosen
+                ]
+                event_ages = [
+                    max(0.0, (now_utc - dt(e["start"])).total_seconds() / 60)
+                    for e in chosen
+                ]
+                lags = [
+                    max(
+                        0.0,
+                        (dt(e["fetched_at"]) - dt(e["published_at"])).total_seconds()
+                        / 60,
+                    )
+                    for e in chosen
+                    if e.get("published_at")
+                ]
+                snapshot_age = round(max(snap_ages), 1)
+                event_age = round(max(event_ages), 1)
+                data_lag = round(max(lags), 1) if lags else None
+            else:
+                snapshot_age = None
+                event_age = None
+                data_lag = None
+
+            # ----------------------------------------------------------
+            # Статус механизма
+            # ----------------------------------------------------------
+            if coverage_fraction >= 0.9999:
+                mech_status = (
+                    "events_require_review" if chosen else "no_detected_events"
+                )
+            else:
+                mech_status = (
+                    "events_and_missing_data" if chosen else "insufficient_data"
+                )
+
             factors[mechanism] = dict(
                 event_count=len(chosen),
                 linked_group_count=group_count(chosen),
                 event_types=dict(Counter(e["kind"] for e in chosen)),
-                known_interval_overlap_minutes=known,
+                known_interval_overlap_minutes=known_minutes,
                 possible_ongoing_event_ids=unknown,
                 observed_event_count=sum(e["basis"] == "observation" for e in chosen),
                 forecast_event_count=sum(
                     e["basis"] == "external_forecast" for e in chosen
                 ),
-                coverage_fraction=round(min(coverage, 1), 4),
-                coverage_scope="selected_products_only_not_total_hazard_coverage",
                 team_calculated_event_count=sum(
                     e["basis"] == "team_calculation" for e in chosen
                 ),
-                source_max_age_minutes=max(
-                    (
-                        max(0, (now() - dt(e["fetched_at"])).total_seconds() / 60)
-                        for e in chosen
-                    ),
-                    default=None,
-                ),
+                coverage_fraction=round(min(coverage_fraction, 1), 4),
+                coverage_scope="selected_products_only_not_total_hazard_coverage",
+                snapshot_age_minutes=snapshot_age,
+                event_age_minutes=event_age,
+                data_lag_minutes=data_lag,
                 next_event_in_minutes=min(
                     (
                         (dt(e["start"]) - a).total_seconds() / 60
@@ -338,15 +543,17 @@ def assess(bundle, q):
                     ),
                     default=None,
                 ),
-                status=("events_require_review" if chosen else "no_detected_events")
-                if coverage >= 0.9999
-                else ("events_and_missing_data" if chosen else "insufficient_data"),
+                status=mech_status,
                 event_ids=[e["id"] for e in chosen],
             )
+
+        # ------------------------------------------------------------------
+        # Разбивка перекрытия по basis
+        # ------------------------------------------------------------------
         for mechanism in MECHANISMS:
             f = factors[mechanism]
             for basis in ("observation", "external_forecast", "team_calculation"):
-                f[basis + "_overlap_minutes"] = union_minutes(
+                f[f"{basis}_overlap_minutes"] = union_minutes(
                     [
                         (max(a, dt(e["start"])), min(b, dt(e["end"])))
                         for e in events
@@ -355,21 +562,39 @@ def assess(bundle, q):
                         and e["end"]
                     ]
                 )
+
+        # ------------------------------------------------------------------
+        # Debris-специфика: min miss distance, max speed
+        # ------------------------------------------------------------------
         debris = [
-            e for e in events if e["id"] in factors["tracked_debris"]["event_ids"]
+            e for e in events
+            if e["id"] in factors["tracked_debris"]["event_ids"]
         ]
         factors["tracked_debris"]["minimum_miss_distance_km"] = min(
-            (e["values"]["miss_distance_km"] for e in debris), default=None
+            (e["values"].get("miss_distance_km") for e in debris),
+            default=None,
         )
         factors["tracked_debris"]["maximum_relative_speed_km_s"] = max(
-            (e["values"]["relative_speed_km_s"] for e in debris), default=None
+            (e["values"].get("relative_speed_km_s") for e in debris),
+            default=None,
         )
+
         windows.append(
-            dict(start=iso(a), end=iso(b), duration_hours=duration, factors=factors)
+            dict(
+                start=iso(a),
+                end=iso(b),
+                duration_hours=duration,
+                factors=factors,
+            )
         )
-    # Compare event burden only; missing critical mechanisms prohibit recommendation.
+
+    # ------------------------------------------------------------------
+    # 3. Парето-фронтир по burden
+    # ------------------------------------------------------------------
     vectors = [
-        tuple(w["factors"][m]["known_interval_overlap_minutes"] for m in MECHANISMS)
+        tuple(
+            w["factors"][m]["known_interval_overlap_minutes"] for m in MECHANISMS
+        )
         for w in windows
     ]
     frontier = [
@@ -381,25 +606,71 @@ def assess(bundle, q):
             for other in vectors
         )
     ]
+
+    # ------------------------------------------------------------------
+    # 4. Достаточность данных
+    # ------------------------------------------------------------------
+    # Достаточно, если по каждому механизму:
+    #   * coverage_fraction == 1
+    #   * нет possible_ongoing_event_ids
     sufficient = all(
-        f["coverage_fraction"] == 1 and not f["possible_ongoing_event_ids"]
+        f["coverage_fraction"] == 1.0 and not f["possible_ongoing_event_ids"]
         for w in windows
         for f in w["factors"].values()
     )
-    selection = (
-        select_best_window(windows, q.get("requirements"))
-        if events
-        else {
+
+    # ------------------------------------------------------------------
+    # 5. Выбор окна
+    # ------------------------------------------------------------------
+    if not events:
+        selection = {
             "preferred_window_index": None,
             "reason": "нет событий и недостаточно данных для выбора",
             "ranked": [],
+            "recommendation_status": "no_events",
         }
+    else:
+        selection = select_best_window(windows, q.get("requirements"))
+
+    # ------------------------------------------------------------------
+    # 6. Согласование recommendation
+    # ------------------------------------------------------------------
+    # Правило:
+    #   * insufficient_evidence   → preferred_window = None
+    #   * review_candidates       → preferred_window = выбранное окно
+    #   * not_checked / no_eligible_window / no_events
+    #                             → preferred_window = None
+    if not sufficient:
+        rec_status = "insufficient_evidence"
+        preferred_for_output = None
+        rec_reason = (
+            "No operational risk model; coverage is product-specific. "
+            "Unknown exposure and alternatives are not zero risk."
+        )
+    elif selection["recommendation_status"] == "recommended":
+        rec_status = "review_candidates"
+        preferred_for_output = selection["preferred_window_index"]
+        rec_reason = (
+            "Candidates ranked by event burden under provided requirements."
+        )
+    else:
+        rec_status = selection["recommendation_status"]
+        preferred_for_output = None
+        rec_reason = selection.get("reason", "Рекомендация не выдаётся.")
+
+    preferred_window = (
+        windows[preferred_for_output]
+        if preferred_for_output is not None
+        else None
     )
-    preferred = selection["preferred_window_index"]
+
+    # ------------------------------------------------------------------
+    # 7. Результат
+    # ------------------------------------------------------------------
     return dict(
         algorithm_version=VERSION,
         query=q,
-        generated_at=iso(now()),
+        generated_at=iso(now_utc),
         windows=windows,
         events=events,
         context=bundle.get("context", []),
@@ -408,10 +679,10 @@ def assess(bundle, q):
         excluded_unknown_publication=excluded_unknown_publication,
         event_burden_frontier_indices=frontier,
         recommendation=dict(
-            status="insufficient_evidence" if not sufficient else "review_candidates",
-            preferred_window=windows[preferred] if preferred is not None else None,
+            status=rec_status,
+            preferred_window=preferred_window,
             window_selection=selection,
-            reason="No operational risk model; coverage is product-specific. Unknown exposure and alternatives are not zero risk.",
+            reason=rec_reason,
         ),
         limitations=bundle.get("limitations", []),
     )
