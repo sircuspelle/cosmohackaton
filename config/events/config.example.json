@@ -1,5 +1,5 @@
 {
-  "database": "data/eva.sqlite3",
+  "database": "data/events/eva.sqlite3",
   "timeout_seconds": 20,
   "retry_count": 1,
   "workers": 4,

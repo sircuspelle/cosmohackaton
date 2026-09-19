@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # Импорты внутренних классов (предполагаем, что они лежат рядом)
 # ---------------------------------------------------------------------------
 try:
-    from data.conditions.protons import ProtonPoint
+    from src.main.conditions.protons import ProtonPoint
 except ImportError:
     # Фолбэк на случай, если структура папок отличается
     @dataclass
@@ -63,7 +63,7 @@ ISS_NORAD_ID = 25544
 TIMEOUT = (5, 15)  # (connect, read)
 
 # Кэши
-TLE_CACHE_PATH = Path("tle_cache.json")
+TLE_CACHE_PATH = Path("data/conditions/tle_cache.json")
 TLE_CACHE_TTL = timedelta(hours=6)
 
 # Публичный источник TLE без ключа (только для текущего времени!)
@@ -168,7 +168,7 @@ class SpaceDataAdapter:
             # Здесь в идеале дергаем self.noaa.get_historical_netcdf или грузим из локального дампа
             # Для демо хакатона можно загрузить локальный json
             try:
-                with open("archive_protons_may2024.json", "r") as f:
+                with open("data/conditions/archive_protons_may2024.json", "r") as f:
                     raw = json.load(f)
                 return self._parse_protons(raw, energy)
             except FileNotFoundError:
@@ -405,8 +405,7 @@ class SpaceDataAdapter:
                                   duration_min: int = 90,
                                   align_to_now: bool = False):
 
-        # Локальный импорт чтобы избежать циклических зависимостей
-        from window import Window
+        from src.main.window import Window
 
         # Если задан alignment или нет протонов, берем точку отсчета контекста (now или as_of)
         if align_to_now or not ctx.protons:

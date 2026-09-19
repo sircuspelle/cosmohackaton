@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any, Mapping, Sequence, Optional
 
-from data.window import Window
+from src.main.window import Window
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from math import isfinite
 from typing import Iterable, Optional, Sequence, Dict, Any
 
-from data.window import Window
+from src.main.window import Window
 
 
 @dataclass(frozen=True)

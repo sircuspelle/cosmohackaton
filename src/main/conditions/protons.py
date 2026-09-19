@@ -17,7 +17,7 @@ from datetime import datetime
 from statistics import median
 from typing import List, Dict, Optional, Sequence, Iterable
 
-from data.window import Window
+from src.main.window import Window
 import math  # убедись, что math импортирован в начале файла
 
 @dataclass
