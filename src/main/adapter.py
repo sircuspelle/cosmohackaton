@@ -10,8 +10,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import logging
 import math
@@ -32,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Импорты внутренних классов (предполагаем, что они лежат рядом)
 # ---------------------------------------------------------------------------
 try:
-    from data.conditions.protons import ProtonPoint
+    from src.main.conditions.protons import ProtonPoint
 except ImportError:
     # Фолбэк на случай, если структура папок отличается
     @dataclass

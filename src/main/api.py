@@ -1,14 +1,14 @@
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from data.window import Window
-from data.conditions.thermal import ThermalCalculator
-from data.conditions.debris import DebrisCalculator
-from data.conditions.illumination import IlluminationCalculator
+from src.main.window import Window
+from src.main.conditions.thermal import ThermalCalculator
+from src.main.conditions.debris import DebrisCalculator
+from src.main.conditions.illumination import IlluminationCalculator
 from data.conditions.proton import TrajectoryAwareProtonCalculator, ProtonPoint
-from data.window_comparator import WindowComparator
+from src.main.window_comparator import WindowComparator
 
 app = FastAPI(
     title="ISS EVA Window Decision Support API",

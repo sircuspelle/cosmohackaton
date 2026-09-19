@@ -1,10 +1,10 @@
 import unittest
 from datetime import datetime, timezone
 
-from data.window_comparator import WindowComparator
+from src.main.window_comparator import WindowComparator
 
-from data.conditions.debris import DebrisCalculator, DebrisObservation, MeteoroidSample
-from data.window import Window
+from src.main.conditions.debris import DebrisCalculator, DebrisObservation, MeteoroidSample
+from src.main.window import Window
 
 
 class TestWindowAndComparator(unittest.TestCase):

@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Any, Mapping, Sequence, Optional
+from typing import Any, Mapping, Sequence, Optional, Tuple
 
-from data.window import Window
+from src.main.conditions.warnings import WarningAssessment
+from src.main.window import Window
 
 
 @dataclass(frozen=True)
@@ -19,8 +20,9 @@ class FactorAssessment:
     risk_score: Optional[float]
     data_coverage_pct: float = 100.0
     overlap_minutes: float = 0.0
-    missing_data: tuple[str, ...] = ()
+    missing_data: Tuple[str, ...] = ()
     explanation: str = ""
+    warning_assessment: Optional[WarningAssessment] = None
 
 
 @dataclass(frozen=True)
