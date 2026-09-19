@@ -63,7 +63,7 @@ conditions + events_adapter --> WindowComparator --> сравнение факт
 
 ```text
 config/events/config.example.json  пример параметров источников
-data/eva.sqlite3                   SQLite-кэш и сохранённые прогоны
+data/events/eva.sqlite3            SQLite-кэш и сохранённые прогоны (создаётся автоматически)
 docs/conditions/                   документация и зависимости расчётов условий
 docs/events/                       описание событий, явлений и валидации
 src/main/app.py                    CLI и HTTP-сервис
@@ -77,7 +77,7 @@ src/main/window_comparator.py      объяснимое сравнение ок�
 src/test/                          89 unit/integration/replay тестов
 ```
 
-Файлы `__pycache__` — скомпилированный кэш Python; `data/eva.sqlite3` — рабочие сохранённые данные. Их не следует считать исходным кодом.
+Файлы `__pycache__` — скомпилированный кэш Python; `data/events/eva.sqlite3` — рабочие сохранённые данные. Их не следует считать исходным кодом.
 
 ## Модули
 
@@ -138,10 +138,11 @@ src/test/                          89 unit/integration/replay тестов
 Требуется Python 3.10+ (проект проверялся с Python 3.12). Выполняйте команды из корня репозитория.
 
 ```powershell
+Set-Location <путь-к-корню-репозитория>
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r docs\conditions\requirements.txt
+python -m pip install -r .\docs\conditions\requirements.txt
 ```
 
 Минимальный набор: `requests`, `skyfield`, `numpy`, `pytest`. `requests` необязателен для транспорта, но рекомендуется; при его отсутствии есть fallback на стандартный `urllib`.
@@ -150,7 +151,7 @@ python -m pip install -r docs\conditions\requirements.txt
 
 ## CLI
 
-Все команды запускаются как `python -m src.main.app`.
+Все команды запускаются из корня репозитория как `python -m src.main.app`. Не запускайте файл как `python src/main/app.py`: абсолютные импорты проекта требуют модульного запуска.
 
 ### Разовый расчёт
 
@@ -160,11 +161,18 @@ python -m src.main.app assess `
   --duration-hours 6 `
   --search-hours 6 `
   --step-minutes 60 `
-  --mode live `
-  --output result.json
+  --mode reconstruction `
+  --output .\result.json
 ```
 
-`assess` создаёт окно в 12:00 и варианты со сдвигом до указанного `search-hours`. В `live` историческое начало старше часа запрещено; для прошлого используйте `reconstruction`. Опция `--offline` разрешает только данные, уже лежащие в SQLite; `--force-refresh` игнорирует свежесть TTL и запрашивает данные заново.
+`assess` создаёт окно в 12:00 и варианты со сдвигом до указанного `search-hours`. Для заданной даты в примере используется `reconstruction`, потому что она может оказаться в прошлом. В `live` начало не может быть старше одного часа: это защита от ошибочного использования текущих данных как исторических. Для текущей обстановки подставьте текущее UTC-время:
+
+```powershell
+$start = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+python -m src.main.app assess --start $start --duration-hours 6 --search-hours 6 --step-minutes 60 --mode live --output .\result.json
+```
+
+Опция `--offline` разрешает только данные, уже лежащие в SQLite; `--force-refresh` игнорирует свежесть TTL и запрашивает данные заново.
 
 ### Историческая честная оценка
 
@@ -173,7 +181,7 @@ python -m src.main.app assess `
   --start 2024-05-10T12:00:00Z `
   --duration-hours 6 --search-hours 6 --mode as_of `
   --as-of 2024-05-10T11:00:00Z --offline `
-  --output asof.json
+  --output .\asof.json
 ```
 
 В `as_of` используются только снимки и события, известные к `--as-of`; если сохранённого ответа нет, расчёт завершается ошибкой, а не подставляет новую информацию. `reconstruction` разрешает воспроизвести прошлый период по доступным данным, но не называет это прогнозом, известным в тот момент.
@@ -182,13 +190,13 @@ python -m src.main.app assess `
 
 ```powershell
 # Контекст протонов, TLE, SEP и предупреждений
-python -m src.main.app conditions --start 2026-09-19T12:00:00Z --duration-hours 6 --output conditions.json
+python -m src.main.app conditions --start 2026-09-19T12:00:00Z --duration-hours 6 --output .\conditions.json
 
 # Синтетическая демонстрация
-python -m src.main.app demo --output demo_result.json
+python -m src.main.app demo --output .\demo_result.json
 
 # Пересчёт ранее сохранённого прогона
-python -m src.main.app replay <run_id> --output replayed.json
+python -m src.main.app replay <run_id> --output .\replayed.json
 ```
 
 Идентификатор `run_id` возвращается в JSON разового расчёта. Повторный расчёт использует сохранённые нормализованные входы; сырые тела ответов остаются в SQLite.
@@ -241,7 +249,7 @@ Copy-Item config\events\config.example.json config\events\config.local.json
 python -m src.main.app --config config\events\config.local.json assess --output result.json
 ```
 
-Параметры: путь к БД, тайм-аут и число повторов HTTP, лимит ответа, число воркеров (1–8), пороги протонов/X-ray/Kp, буфер сближения, NORAD ID, глубина lookback (1–30 дней), отключённые источники и TTL. Не добавляйте секреты или учётные данные Space-Track в коммит; используйте переменные окружения или локальный неотслеживаемый конфиг.
+Глобальная опция `--config` указывается **до** команды `assess`, `serve` и т. п. В `config.example.json` путь БД задан как `data/events/eva.sqlite3`; если такой папки ещё нет, `Store` создаст её сам. Параметры: путь к БД, тайм-аут и число повторов HTTP, лимит ответа, число воркеров (1–8), пороги протонов/X-ray/Kp, буфер сближения, NORAD ID, глубина lookback (1–30 дней), отключённые источники и TTL. Не добавляйте секреты или учётные данные Space-Track в коммит; используйте переменные окружения или локальный неотслеживаемый конфиг.
 
 ## Тестирование
 
