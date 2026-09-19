@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import math
@@ -18,7 +20,11 @@ from datetime import datetime, timezone as _tz, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-import requests
+try:
+    import requests
+except ImportError:  # requests is optional; the adapter remains importable offline
+    requests = None
+from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +98,13 @@ def _to_naive_utc(dt: datetime) -> datetime:
 
 def _now(as_of: Optional[datetime] = None) -> datetime:
     """Возвращает `as_of`, если задан (исторический режим), иначе текущее UTC время."""
-    return as_of if as_of else datetime.utcnow()
+    if as_of is None:
+        return datetime.utcnow()
+    return _to_naive_utc(as_of)
+
+
+def _is_older_than(as_of: Optional[datetime], delta: timedelta) -> bool:
+    return as_of is not None and datetime.utcnow() - _now(as_of) > delta
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +118,8 @@ class TLERecord:
     line2: str
     epoch: datetime
     norad_id: int
+    source: str = "unknown"
+    retrieved_at: Optional[datetime] = None
 
 
 @dataclass
@@ -149,7 +163,7 @@ class SpaceDataAdapter:
 
     def fetch_protons(self, energy: str = '>=10 MeV', as_of: Optional[datetime] = None) -> List[ProtonPoint]:
         # Если исторический режим
-        if as_of and (datetime.utcnow() - as_of) > timedelta(days=2):
+        if _is_older_than(as_of, timedelta(days=2)):
             logger.info("[REPLAY] Запрос архивных протонов на %s", as_of)
             # Здесь в идеале дергаем self.noaa.get_historical_netcdf или грузим из локального дампа
             # Для демо хакатона можно загрузить локальный json
@@ -190,7 +204,7 @@ class SpaceDataAdapter:
 
     def fetch_conjunctions(self, max_range_km: float = 100.0, max_days_ahead: int = 7,
                            as_of: Optional[datetime] = None) -> List[Conjunction]:
-        if as_of and (datetime.utcnow() - as_of) > timedelta(days=7):
+        if _is_older_than(as_of, timedelta(days=7)):
             logger.warning("[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом симулируются или пропускаются.")
             return []  # SOCRATES не отдает архивы по API, на хакатоне это ок
 
@@ -215,13 +229,19 @@ class SpaceDataAdapter:
             try:
                 tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=_tz.utc)
             except ValueError:
-                tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+                try:
+                    tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+                except ValueError:
+                    continue
 
             # Отсекаем сближения за пределами нашего горизонта прогноза
             if tca_dt > limit_dt.replace(tzinfo=_tz.utc) or tca_dt < current_time.replace(tzinfo=_tz.utc):
                 continue
 
-            dist = float(row.get('TCA_RANGE', 999.0))
+            try:
+                dist = float(row.get('TCA_RANGE', 999.0))
+            except (TypeError, ValueError):
+                continue
             if dist > max_range_km:
                 continue
 
@@ -233,7 +253,7 @@ class SpaceDataAdapter:
                 tca=_to_naive_utc(tca_dt),
                 distance_km=dist,
                 object_id=threat_id,
-                relative_speed_km_s=float(row.get('TCA_RELATIVE_SPEED', 0.0))
+                relative_speed_km_s=float(row.get('TCA_RELATIVE_SPEED', 0.0) or 0.0)
             ))
 
         # Сортируем по времени сближения
@@ -248,7 +268,7 @@ class SpaceDataAdapter:
         """
         Умный выбор источника орбиты в зависимости от режима (Текущий или Исторический).
         """
-        is_historical = as_of and (datetime.utcnow() - as_of) > timedelta(days=2)
+        is_historical = _is_older_than(as_of, timedelta(days=2))
 
         if is_historical:
             logger.info("[REPLAY] Поиск орбиты на эпоху %s", as_of)
@@ -256,16 +276,8 @@ class SpaceDataAdapter:
             if self.spacetrack:
                 # реализация вызова к Space-Track...
                 pass
-                # 2. Фолбэк на исторический локальный файл (Для жюри)
-            logger.warning("[REPLAY] Используем локальный архив TLE (Space-Track недоступен).")
-            # На хакатоне можете просто захардкодить майский TLE как fallback
-            return TLERecord(
-                name="ISS (ZARYA) [ARCHIVE]",
-                line1="1 25544U 98067A   24135.50000000  .00016717  00000+0  10270-3 0  9993",
-                line2="2 25544  51.6400 100.0000 0004000  90.0000 270.0000 15.50000000    12",
-                epoch=_to_naive_utc(as_of),
-                norad_id=self.iss_norad_id
-            )
+            logger.warning("[REPLAY] Исторический TLE недоступен: современная орбита не подменяет архивную.")
+            return None
 
         # РЕАЛЬНОЕ ВРЕМЯ
         rec = self._try_celestrak_gp_json()
@@ -300,15 +312,22 @@ class SpaceDataAdapter:
     def _try_wheretheiss(self) -> Optional[TLERecord]:
         url = WHERE_THE_ISS_AT_URL.format(norad=self.iss_norad_id)
         try:
-            r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": "EVA-Risk-Assessor/1.0"})
-            r.raise_for_status()
-            data = r.json()
+            if requests is not None:
+                r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": "EVA-Risk-Assessor/1.0"})
+                r.raise_for_status()
+                data = r.json()
+            else:
+                req = Request(url, headers={"User-Agent": "EVA-Risk-Assessor/1.0"})
+                with urlopen(req, timeout=TIMEOUT[1]) as response:
+                    data = json.loads(response.read().decode("utf-8"))
             return TLERecord(
                 name="ISS (ZARYA)",
                 line1=data['line1'].strip(),
                 line2=data['line2'].strip(),
                 epoch=datetime.utcnow(),
                 norad_id=self.iss_norad_id,
+                source="wheretheiss.at",
+                retrieved_at=datetime.now(_tz.utc),
             )
         except Exception as e:
             logger.warning("wheretheiss.at Error: %s", e)
@@ -325,7 +344,7 @@ class SpaceDataAdapter:
                 epoch=datetime.fromisoformat(data["cached_at"]),
                 norad_id=self.iss_norad_id,
             )
-        except:
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
     # ==================================================================
@@ -359,7 +378,7 @@ class SpaceDataAdapter:
         Если передан `as_of`, собирает исторические данные (Replay).
         """
         current_time = _now(as_of)
-        is_hist = as_of is not None and (datetime.utcnow() - as_of) > timedelta(days=2)
+        is_hist = _is_older_than(as_of, timedelta(days=2))
 
         ctx = SpaceWeatherContext(fetched_at=current_time, is_historical=is_hist)
 
