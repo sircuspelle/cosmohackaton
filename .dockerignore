@@ -1,0 +1,10 @@
+.git
+.gitignore
+.idea
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+docs/
+src/test/
+result.json
