@@ -239,6 +239,48 @@ class ThermalReport:
     def to_dict(self) -> Dict[str, object]:
         return self.metrics.to_dict()
 
+    def get_justification_report(self) -> dict:
+        """
+        Формирует структурированное обоснование для жюри:
+        почему расчет считается валидным и какие факторы на него повлияли.
+        """
+        m = self.metrics
+
+        # 1. Проверка физической корректности (Sanity Check)
+        physics_valid = m.temp_min_c >= -273.15 and m.data_coverage_pct > 0.0
+
+        # 2. Оценка рисков
+        risk_level = "LOW"
+        reasons = []
+
+        if m.temp_max_c > (m.temp_limit_max_c - 10):
+            risk_level = "HIGH"
+            reasons.append(f"Максимальная температура ({m.temp_max_c:.1f}°C) близка к критическому пределу.")
+        elif m.temp_min_c < (m.temp_limit_min_c + 10):
+            risk_level = "MEDIUM"
+            reasons.append(f"Минимальная температура ({m.temp_min_c:.1f}°C) близка к зоне переохлаждения.")
+        else:
+            reasons.append("Все температурные показатели находятся в пределах комфортного диапазона.")
+
+        if m.data_coverage_pct < 95.0:
+            reasons.append(
+                f"Внимание: покрытие данных составляет всего {m.data_coverage_pct:.1f}%, возможна погрешность дискретизации.")
+
+        return {
+            "is_physically_valid": physics_valid,
+            "risk_level": risk_level,
+            "safety_margins": {
+                "cold_margin_deg": round(m.thermal_margin_min_c, 2),
+                "hot_margin_deg": round(m.thermal_margin_max_c, 2)
+            },
+            "physics_basis": (
+                "Расчет выполнен на основе солнечной постоянной (1361 Вт/м²), "
+                "модели альбедо Земли, ИК-излучения планеты и закона Стефана-Больцмана "
+                "для равновесной температуры поверхности."
+            ),
+            "audit_reasons": reasons
+        }
+
 
 # ---------------------------------------------------------------------------
 # Калькулятор

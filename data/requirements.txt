@@ -4,3 +4,6 @@ requests>=2.31
 skyfield>=1.49
 numpy>=1.24
 pytest>=8.0
+fastapi>=0.140.9
+pydantic>=2.10.0
+pydantic-core>=2.10.0

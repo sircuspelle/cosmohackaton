@@ -18,7 +18,7 @@ from statistics import median
 from typing import List, Dict, Optional, Sequence, Iterable
 
 from data.window import Window
-import math  # убедись, что math импортирован в начале файла
+
 
 @dataclass
 class ProtonPoint:
@@ -198,14 +198,6 @@ class ProtonReport:
 class TrajectoryAwareProtonCalculator:
     """
     Расчёт протонных метрик с учётом траектории станции.
-
-    Отличия от предыдущей версии:
-      * возвращает ProtonMetrics/ProtonReport, а не словарь;
-      * разделяет «сырые» и «эффективные» метрики;
-      * медианный шаг вместо фиксированных 5 минут;
-      * корректная доза только по времени;
-      * валидация входных данных;
-      * кэш F_eff в пределах одного вызова.
     """
 
     PROTON_THRESHOLD_PFU = 10.0        # S1
@@ -224,17 +216,9 @@ class TrajectoryAwareProtonCalculator:
         use_path: bool = False,
         threshold_pfu: Optional[float] = None,
         with_report: bool = False,
-    ) -> "ProtonMetrics | ProtonReport":
+    ) -> ProtonMetrics | ProtonReport:
         """
         Основной метод. Возвращает ProtonMetrics (или ProtonReport).
-
-        Параметры:
-            window            — окно ВКД
-            data_series       — точки протонов
-            shielding_g_cm2   — толщина экранировки для оценки дозы
-            use_path          — считать ли также ∫ F_eff dL
-            threshold_pfu     — порог S1 (по умолчанию 10 pfu)
-            with_report       — вернуть ProtonReport вместо ProtonMetrics
         """
         threshold = (threshold_pfu
                      if threshold_pfu is not None
@@ -348,7 +332,6 @@ class TrajectoryAwareProtonCalculator:
         """Фильтрует некорректные точки и сортирует по времени."""
         clean = []
         for p in pts:
-            # Защита от None и отрицательных/NaN значений
             try:
                 flux = float(p.flux)
             except (TypeError, ValueError):
@@ -358,6 +341,7 @@ class TrajectoryAwareProtonCalculator:
             clean.append(p)
         clean.sort(key=lambda x: x.time)
         return clean
+
     @staticmethod
     def _median_step(pts: List[ProtonPoint]) -> float:
         if len(pts) < 2:
