@@ -8,11 +8,11 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.main.events.core import dt, iso, now
+from src.main.core import dt, iso, now
 from src.main.events.adapters import donki, kp, goes, noaa_date, alerts, parse, socrates, jpl
 from src.main.events.service import config_load, collect, run, DEFAULT_CONFIG
 from src.main.events.storage import Store
-from src.main.events.app import serve
+from src.main.app import serve
 
 class ExtendedTests(unittest.TestCase):
     def test_noaa_date_parsing(self):
@@ -105,7 +105,7 @@ class ExtendedTests(unittest.TestCase):
 
         q = json.dumps({'start':'2024-05-10T12:00:00Z', 'duration_hours':6, 'mode':'reconstruction'}).encode()
         req = urllib.request.Request(f'http://{host}:{port}/assess', data=q, method='POST', headers={'Content-Length': str(len(q)), 'Connection': 'close'})
-        with patch('src.main.events.app.run', return_value={'test':'ok'}):
+        with patch('src.main.app.run', return_value={'test':'ok'}):
             try:
                 with urllib.request.urlopen(req) as response:
                     self.assertEqual(response.status, 200)
