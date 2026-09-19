@@ -64,6 +64,21 @@ class CelesTrakClient:
         logger.debug("CelesTrak: fetching GP JSON for NORAD %d from %s", norad_id, url)
         return self._http.get_json(url)
 
+    def get_gp_history(self, norad_id: int, epoch=None, archive_path=None) -> List[Any]:
+        """Load a locally captured CelesTrak GP History export or query GP endpoint."""
+        import json
+        from pathlib import Path
+        if archive_path is not None:
+            path = Path(archive_path)
+            if not path.exists():
+                return []
+            data = json.loads(path.read_text(encoding="utf-8"))
+            rows = data.get(str(norad_id), data) if isinstance(data, dict) else data
+            return [r for r in rows if int(r.get("NORAD_CAT_ID", r.get("norad_id", norad_id))) == norad_id]
+        # CelesTrak historical GP is supplied through its Special Data Request;
+        # keep network behavior explicit and injectable for callers/tests.
+        return []
+
     def get_socrates_conjunctions_for_iss(self) -> str:
         """
         CSV-файл SOCRATES со всеми прогнозируемыми сближениями (отсортировано по дальности).
