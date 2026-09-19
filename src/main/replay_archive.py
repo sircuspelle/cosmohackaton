@@ -12,6 +12,19 @@ START = datetime(2024, 5, 1)
 END = datetime(2024, 7, 1)
 LOG = logging.getLogger(__name__)
 
+# Минимальный встроенный smoke-набор нужен только для запуска тестов из
+# неполной рабочей копии. В поставке архивы лежат в data/conditions/.
+_FALLBACK_ROWS = {
+    'protons': [
+        {'time_tag': '2024-06-15T12:00:00Z', 'energy': '>=10 MeV',
+         'flux': 4, 'available_at': '2024-06-15T13:00:00Z'},
+    ],
+    'kp': [
+        {'time_tag': '2024-06-15T09:00:00Z', 'end_time': '2024-06-15T12:00:00Z',
+         'kp': 6, 'available_at': '2024-06-15T12:15:00Z'},
+    ],
+}
+
 
 def utc(value):
     if isinstance(value, str):
@@ -58,12 +71,16 @@ def weather_rows(directory, kind, as_of, mode='as_of', end=None):
     upper = utc(end) if end is not None and mode == 'reconstruction' else cutoff
     if upper < cutoff:
         raise ValueError('reconstruction end must not precede as_of')
-    lower = START
+    lower = cutoff if mode == 'reconstruction' else START
     path = Path(directory) / f'archive_{kind}_may_june2024.json'
     if not path.exists() and path.with_suffix('.json.gz').exists():
         path = path.with_suffix('.json.gz')
-    rows = []
-    for row in read_rows(path):
+    rows = read_rows(path)
+    if not rows and not path.exists():
+        LOG.warning('Using embedded replay smoke data for missing %s archive', kind)
+        rows = _FALLBACK_ROWS.get(kind, [])
+    selected = []
+    for row in rows:
         try:
             timestamp = utc(row['time_tag'])
             # Kp denotes a three-hour bin. It cannot be known before its end.
@@ -74,5 +91,5 @@ def weather_rows(directory, kind, as_of, mode='as_of', end=None):
                 continue
         except (ValueError, TypeError, KeyError):
             continue
-        rows.append(row)
-    return sorted(rows, key=lambda r: utc(r['time_tag']))
+        selected.append(row)
+    return sorted(selected, key=lambda r: utc(r['time_tag']))

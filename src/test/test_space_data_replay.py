@@ -1,9 +1,8 @@
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import Mock
 
 from src.main.adapter import SpaceDataAdapter
+from src.main.replay_archive import known_at, weather_rows
 
 
 def test_replay_protons_and_kp_are_cut_off():
@@ -35,3 +34,49 @@ def test_replay_context_exposes_limitations():
     ctx = SpaceDataAdapter().build_context(datetime(2024, 5, 10, tzinfo=timezone.utc))
     assert ctx.is_historical
     assert ctx.limitations
+
+
+def test_reconstruction_returns_closed_interval_from_as_of_to_end(tmp_path):
+    archive = tmp_path / "archive_protons_may_june2024.json"
+    archive.write_text(
+        """[
+          {"time_tag":"2024-05-10T09:00:00Z","energy":">=10 MeV","flux":1},
+          {"time_tag":"2024-05-10T12:00:00Z","energy":">=10 MeV","flux":2},
+          {"time_tag":"2024-05-10T15:00:00Z","energy":">=10 MeV","flux":3},
+          {"time_tag":"2024-05-10T18:00:00Z","energy":">=10 MeV","flux":4}
+        ]""",
+        encoding="utf-8",
+    )
+
+    rows = weather_rows(
+        tmp_path,
+        "protons",
+        datetime(2024, 5, 10, 12, tzinfo=timezone.utc),
+        mode="reconstruction",
+        end=datetime(2024, 5, 10, 15, tzinfo=timezone.utc),
+    )
+
+    assert [row["flux"] for row in rows] == [2, 3]
+
+
+def test_weather_rows_rejects_dates_outside_archive_period(tmp_path):
+    assert weather_rows(
+        tmp_path,
+        "protons",
+        datetime(2024, 4, 30, 23, 59, tzinfo=timezone.utc),
+    ) == []
+    assert weather_rows(
+        tmp_path,
+        "protons",
+        datetime(2024, 7, 1, tzinfo=timezone.utc),
+    ) == []
+
+
+def test_known_at_requires_explicit_availability_timestamp():
+    cutoff = datetime(2024, 5, 10, 12, tzinfo=timezone.utc)
+
+    assert not known_at({"time_tag": "2024-05-10T09:00:00Z"}, cutoff)
+    assert known_at(
+        {"available_at": "2024-05-10T11:59:00Z"},
+        cutoff,
+    )

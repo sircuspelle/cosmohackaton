@@ -127,6 +127,15 @@ def main():
         "--mode", choices=["live", "reconstruction", "as_of"], default="live"
     )
     s.add_argument("--as-of")
+    s.add_argument(
+        "--replay-mode",
+        choices=["as_of", "reconstruction"],
+        help="Правила отбора локальных архивных данных",
+    )
+    s.add_argument(
+        "--reconstruction-end",
+        help="Конец интервала reconstruction в ISO 8601",
+    )
     s.add_argument("--energy", default=">=10 MeV")
     s.add_argument("--output", default="conditions.json")
     s = sub.add_parser("demo")
@@ -151,8 +160,22 @@ def main():
         ).astimezone(timezone.utc)
         start = parse_dt(args.start)
         cutoff = parse_dt(args.as_of) if args.as_of else None
+        replay_mode = args.replay_mode or (
+            "reconstruction" if args.mode == "reconstruction" else "as_of"
+        )
+        reconstruction_end = (
+            parse_dt(args.reconstruction_end) if args.reconstruction_end else None
+        )
         if args.mode == "as_of" and cutoff is None:
             p.error("--as-of is required for mode as_of")
+        if replay_mode == "reconstruction" and cutoff is None:
+            cutoff = start
+        if replay_mode == "reconstruction" and reconstruction_end is None:
+            p.error("--reconstruction-end is required for replay-mode reconstruction")
+        if replay_mode != "reconstruction" and reconstruction_end is not None:
+            p.error("--reconstruction-end requires --replay-mode reconstruction")
+        if reconstruction_end is not None and reconstruction_end < cutoff:
+            p.error("--reconstruction-end must not be earlier than replay start")
         if cutoff and cutoff > start:
             p.error("--as-of must not be later than --start")
         adapter = SpaceDataAdapter(
@@ -160,18 +183,27 @@ def main():
             celestrak=CelesTrakClient(),
             spacetrack=SpaceTrackClient(),
         )
-        ctx = adapter.build_context(as_of=cutoff, energy=args.energy)
+        ctx = adapter.build_context(
+            as_of=cutoff,
+            energy=args.energy,
+            replay_mode=replay_mode,
+            reconstruction_end=reconstruction_end,
+        )
         result = {
             "start": args.start,
             "duration_hours": args.duration_hours,
             "mode": args.mode,
             "as_of": args.as_of,
+            "replay_mode": replay_mode,
+            "reconstruction_end": args.reconstruction_end,
             "protons": [
                 {"time": x.time.isoformat(), "flux": x.flux} for x in ctx.protons
             ],
             "iss_tle": ctx.iss_tle.__dict__ if ctx.iss_tle else None,
             "sep_events": ctx.sep_events,
             "alerts": ctx.alerts,
+            "kp": ctx.kp,
+            "limitations": ctx.limitations,
         }
         Path(args.output).write_text(
             json.dumps(result, ensure_ascii=False, indent=2, default=str)

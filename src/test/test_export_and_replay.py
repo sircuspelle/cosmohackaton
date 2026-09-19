@@ -73,9 +73,12 @@ class TestRunPersistence(unittest.TestCase):
             self.assertIn('snapshot_id', src)
             self.assertIn('fetched_at', src)
             self.assertIn('url', src)
-            # Статус — опционален: у синтетического demo его может не быть
-            if 'status' in src:
-                self.assertIsInstance(src['status'], str)
+            self.assertIn('status', src)
+            self.assertIn('event_count', src)
+            self.assertIn('context_count', src)
+            self.assertIsInstance(src['status'], str)
+            self.assertIsInstance(src['event_count'], int)
+            self.assertIsInstance(src['context_count'], int)
     def test_snapshot_evidence_stored_and_retrievable(self):
         """Сырой ответ источника сохраняется как snapshot (evidence)."""
         with tempfile.TemporaryDirectory() as tmp:
