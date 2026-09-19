@@ -107,7 +107,8 @@ class EventTests(unittest.TestCase):
             with closing(store.connect()) as db, db:
                 db.execute('INSERT INTO snapshots VALUES(?,?,?,?,?)',('old',spec['url'],'2024-05-10T00:00:00Z','[]','{}'))
             self.assertIsNone(store.last(spec['url'],dt('2024-05-09T00:00Z')))
-            with patch('src.main.events.storage.urlopen',side_effect=OSError('network unavailable')):
+            from src.main.apis.http_client import HttpClientError
+            with patch('src.main.events.storage.HttpClient.get_text', side_effect=HttpClientError('network unavailable')):
                 r=store.fetch(spec,{**DEFAULT_CONFIG,'retry_count':0})
             self.assertEqual(r['transport_status'],'stale')
             self.assertIsNotNone(r['error'])
