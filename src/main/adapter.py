@@ -4,7 +4,7 @@
 
 Поддерживает ИСТОРИЧЕСКИЙ РЕЖИМ (Replay) через параметр `as_of`.
 Если `as_of` задан, адаптер переключается на архивные эндпоинты
-(Space-Track для орбит, архивы NOAA) и игнорирует текущие данные.
+(локальная историческая выгрузка CelesTrak, архивы NOAA/GFZ) и игнорирует текущие данные.
 
 Все HTTP-запросы делегируются клиентам из пакета `src.main.apis`.
 """
@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 from datetime import timezone as _tz
 from pathlib import Path
 from typing import Any
+
+from src.main.replay_archive import DEFAULT_ARCHIVE_DIR, START, END, known_at, utc, validate_mode, weather_rows
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,8 @@ class SpaceWeatherContext:
     sep_events: list[dict[str, Any]] = field(default_factory=list)
     fetched_at: datetime | None = None
     is_historical: bool = False
+    kp: list[dict[str, Any]] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
 
     def is_ready(self) -> bool:
         return bool(self.protons or self.iss_tle)
@@ -171,6 +175,7 @@ class SpaceDataAdapter:
         iss_norad_id: int = ISS_NORAD_ID,
         tle_cache_path: Path = TLE_CACHE_PATH,
         tle_cache_ttl: timedelta = TLE_CACHE_TTL,
+        archive_dir: Path = DEFAULT_ARCHIVE_DIR,
     ):
         self.noaa = noaa
         self.celestrak = celestrak
@@ -180,26 +185,19 @@ class SpaceDataAdapter:
         self.iss_norad_id = iss_norad_id
         self.tle_cache_path = tle_cache_path
         self.tle_cache_ttl = tle_cache_ttl
+        self.archive_dir = Path(archive_dir)
 
     # ==================================================================
     # Протоны (NOAA GOES)
     # ==================================================================
 
     def fetch_protons(
-        self, energy: str = ">=10 MeV", as_of: datetime | None = None
+        self, energy: str = ">=10 MeV", as_of: datetime | None = None,
+        *, replay_mode: str = "as_of", end: datetime | None = None,
     ) -> list[ProtonPoint]:
-        # Если исторический режим
-        if _is_older_than(as_of, timedelta(days=2)):
-            logger.info("[REPLAY] Запрос архивных протонов на %s", as_of)
-            try:
-                with open("data/conditions/archive_protons_may2024.json", "r") as f:
-                    raw = json.load(f)
-                return self._parse_protons(raw, energy)
-            except FileNotFoundError:
-                logger.warning(
-                    "[REPLAY] Архив протонов не найден. Требуется NCEI парсер."
-                )
-                return []
+        if as_of is not None:
+            raw = weather_rows(self.archive_dir, 'protons', as_of, replay_mode, end)
+            return self._parse_protons(raw, energy)
 
         # Режим реального времени
         if not self.noaa:
@@ -215,6 +213,8 @@ class SpaceDataAdapter:
     def _parse_protons(raw: list[dict], energy: str = ">=10 MeV") -> list[ProtonPoint]:
         points: list[ProtonPoint] = []
         for row in raw:
+            if not isinstance(row, dict):
+                continue
             if row.get("energy") != energy:
                 continue
             try:
@@ -228,6 +228,31 @@ class SpaceDataAdapter:
         points.sort(key=lambda p: p.time)
         return points
 
+    def fetch_kp(self, as_of: datetime | None = None, *,
+                 replay_mode: str = 'as_of', end: datetime | None = None) -> list[dict]:
+        if as_of is not None:
+            raw = weather_rows(self.archive_dir, 'kp', as_of, replay_mode, end)
+        elif self.noaa:
+            try:
+                raw = self.noaa.get_kp_index()
+            except Exception as exc:
+                logger.warning('NOAA Kp: %s', exc)
+                return []
+        else:
+            return []
+        if raw and isinstance(raw[0], list):
+            raw = [dict(zip(raw[0], row)) for row in raw[1:]]
+        result = []
+        for row in raw:
+            try:
+                timestamp = utc(row['time_tag'])
+                value = float(row['kp'])
+                if math.isfinite(value) and 0 <= value <= 9:
+                    result.append({**row, 'time_tag': timestamp.isoformat() + 'Z', 'kp': value})
+            except (KeyError, TypeError, ValueError):
+                continue
+        return sorted(result, key=lambda r: r['time_tag'])
+
     # ==================================================================
     # Сближения (SOCRATES через CelesTrakClient)
     # ==================================================================
@@ -238,7 +263,7 @@ class SpaceDataAdapter:
         max_days_ahead: int = 7,
         as_of: datetime | None = None,
     ) -> list[Conjunction]:
-        if _is_older_than(as_of, timedelta(days=7)):
+        if as_of is not None:
             logger.warning(
                 "[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом пропускаются."
             )
@@ -314,27 +339,31 @@ class SpaceDataAdapter:
     # TLE МКС
     # ==================================================================
 
-    def fetch_iss_tle(self, as_of: datetime | None = None) -> TLERecord | None:
-        """
-        Умный выбор источника орбиты в зависимости от режима (Текущий или Исторический).
-        """
-        is_historical = _is_older_than(as_of, timedelta(days=2))
-
-        if is_historical:
-            if self.spacetrack:
+    def fetch_iss_tle(self, as_of: datetime | None = None, *,
+                      replay_mode: str = 'as_of') -> TLERecord | None:
+        if as_of is not None:
+            validate_mode(replay_mode)
+            client = self.celestrak or CelesTrakClient()
+            try:
                 try:
-                    row = self.spacetrack.get_tle_at(self.iss_norad_id, as_of)
-                    if row:
-                        return self._tle_from_row(row, "spacetrack")
-                except Exception as e:
-                    logger.warning("[REPLAY] Space-Track: %s", e)
-            cached = self._find_tle_for_epoch(self.iss_norad_id, as_of)
-            if (
-                cached
-                and abs((cached.epoch - _to_naive_utc(as_of)).total_seconds()) < 86400
-            ):
-                return cached
-            return None
+                    rows = client.get_gp_history(self.iss_norad_id,
+                        archive_path=self.archive_dir / 'archive_tle_may_june2024.json')
+                except TypeError:
+                    rows = client.get_gp_history(self.iss_norad_id, as_of)
+            except Exception as exc:
+                logger.warning('[REPLAY] CelesTrak archive: %s', exc)
+                rows = []
+            selected = self._select_historical_tle(rows, as_of, replay_mode, 'celestrak_gp_history')
+            if selected:
+                return selected
+            # Same eligibility rules apply to fallback caches.
+            try:
+                raw = json.loads(self.tle_cache_path.read_text(encoding='utf-8'))
+                rows = raw.get(str(self.iss_norad_id), raw.get('tle', []))
+                rows = [rows] if isinstance(rows, dict) else rows
+            except (OSError, ValueError, AttributeError):
+                rows = []
+            return self._select_historical_tle(rows, as_of, replay_mode, 'file_cache')
 
         # РЕАЛЬНОЕ ВРЕМЯ — пробуем источники по приоритету
         rec = self._try_celestrak_gp_json()
@@ -396,29 +425,44 @@ class SpaceDataAdapter:
             return None
 
     def _tle_from_row(self, row, source):
-        return TLERecord(
-            row.get("OBJECT_NAME", "ISS (ZARYA)"),
-            row.get("TLE_LINE1") or row.get("LINE1"),
-            row.get("TLE_LINE2") or row.get("LINE2"),
-            _to_naive_utc(_parse_utc(row["EPOCH"])),
-            int(row.get("NORAD_CAT_ID", self.iss_norad_id)),
-            source,
-            datetime.now(_tz.utc),
-        )
+        line1 = row.get('TLE_LINE1') or row.get('LINE1') or row.get('line1')
+        line2 = row.get('TLE_LINE2') or row.get('LINE2') or row.get('line2')
+        if not line1 or not line2 or not line1.startswith('1 ') or not line2.startswith('2 '):
+            raise ValueError('Missing or invalid TLE lines')
+        # Epoch comes from the TLE itself, never from a cache retrieval timestamp.
+        year = int(line1[18:20])
+        year += 2000 if year < 57 else 1900
+        epoch = datetime(year, 1, 1) + timedelta(days=float(line1[20:32]) - 1)
+        norad = int(line1[2:7])
+        if int(line2[2:7]) != norad:
+            raise ValueError('TLE object IDs differ')
+        return TLERecord(row.get('OBJECT_NAME', row.get('name', 'ISS (ZARYA)')),
+            line1, line2, epoch, norad, source,
+            utc(row['fetched_at']) if row.get('fetched_at') else None)
+
+    def _select_historical_tle(self, rows, as_of, mode, source):
+        cutoff = utc(as_of)
+        eligible = []
+        for row in rows:
+            try:
+                record = self._tle_from_row(row, source)
+                age = cutoff - record.epoch
+                if record.norad_id != self.iss_norad_id or not timedelta(0) <= age <= timedelta(days=1):
+                    continue
+                if mode == 'as_of' and not known_at(row, cutoff):
+                    continue
+                eligible.append(record)
+            except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                continue
+        return max(eligible, key=lambda r: r.epoch) if eligible else None
 
     def _find_tle_for_epoch(self, norad_id, as_of):
-        if not self.tle_cache_path.exists():
-            return None
         try:
             raw = json.loads(self.tle_cache_path.read_text())
-            rows = raw.get(str(norad_id), raw.get("tle", []))
+            rows = raw.get(str(norad_id), raw.get('tle', []))
             rows = [rows] if isinstance(rows, dict) else rows
-            parsed = [
-                self._tle_from_row(r, r.get("source", "file_cache")) for r in rows
-            ]
-            parsed = [r for r in parsed if r.epoch <= _to_naive_utc(as_of)]
-            return max(parsed, key=lambda r: r.epoch) if parsed else None
-        except Exception:
+            return self._select_historical_tle(rows, as_of, 'as_of', 'file_cache')
+        except (OSError, ValueError, AttributeError):
             return None
 
     def _save_tle_to_cache(self, rec):
@@ -468,6 +512,9 @@ class SpaceDataAdapter:
     def fetch_sep_events(
         self, days_back: int = 7, as_of: datetime | None = None
     ) -> list[dict[str, Any]]:
+        if as_of is not None:
+            # DONKI archive responses can contain later revisions with no publication evidence.
+            return []
         if not self.donki:
             return []
         end = _now(as_of).date()
@@ -490,19 +537,45 @@ class SpaceDataAdapter:
         max_conj_range_km: float = 100.0,
         max_conj_days_ahead: int = 7,
         sep_days_back: int = 7,
+        replay_mode: str = "as_of",
+        reconstruction_end: datetime | None = None,
     ) -> SpaceWeatherContext:
         """
         Собирает всё в один объект.
         Если передан `as_of`, собирает исторические данные (Replay).
         """
         current_time = _now(as_of)
-        is_hist = _is_older_than(as_of, timedelta(days=2))
+        is_hist = as_of is not None
+        if is_hist:
+            validate_mode(replay_mode)
 
         ctx = SpaceWeatherContext(fetched_at=current_time, is_historical=is_hist)
 
-        ctx.protons = self.fetch_protons(energy=energy, as_of=as_of)
-        ctx.iss_tle = self.fetch_iss_tle(as_of=as_of)
+        ctx.protons = self.fetch_protons(energy=energy, as_of=as_of, replay_mode=replay_mode, end=reconstruction_end)
+        ctx.kp = self.fetch_kp(as_of=as_of, replay_mode=replay_mode, end=reconstruction_end)
+        ctx.iss_tle = self.fetch_iss_tle(as_of=as_of, replay_mode=replay_mode)
         ctx.sep_events = self.fetch_sep_events(sep_days_back, as_of=as_of)
+
+        ctx.conjunctions = self.fetch_conjunctions(max_conj_range_km, max_conj_days_ahead, as_of)
+        if is_hist:
+            ctx.limitations.append('SOCRATES: исторические прогнозы сближений отсутствуют; риск мусора не равен нулю.')
+            ctx.limitations.append('Исторические NOAA alerts и версии DONKI на момент прогноза отсутствуют.')
+            if not START <= utc(as_of) < END:
+                ctx.limitations.append('Дата вне локального архива 2024-05-01 — 2024-06-30.')
+            if replay_mode == 'reconstruction':
+                ctx.limitations.append('Реконструкция использует ретроспективные данные; доступность на дату прогноза не доказана.')
+            else:
+                ctx.limitations.append('Строгий as_of исключает записи без подтверждённого времени доступности и более поздние версии.')
+            if not ctx.protons:
+                ctx.limitations.append('Нет допустимых протонных измерений в выбранном интервале.')
+            if not ctx.kp:
+                ctx.limitations.append('Нет допустимых Kp в выбранном интервале.')
+            if ctx.iss_tle is None:
+                ctx.limitations.append('Нет допустимой исторической TLE не старше суток; нужна выгрузка CelesTrak GP History.')
+            if ctx.kp:
+                ctx.limitations.append('Kp — планетарный трёхчасовой индекс, не локальный риск или доза на МКС.')
+            if ctx.protons:
+                ctx.limitations.append('GOES — измерения на геостационарной орбите, не доза на МКС; пропуски не интерполированы.')
 
         # Алерты
         if self.noaa and not is_hist:
