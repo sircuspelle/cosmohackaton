@@ -2,7 +2,8 @@ import json
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from src.main.events.core import validate_query, assess, now, dt, iso
+from src.main.utils import now, dt, iso
+from src.main.events.core import validate_query, assess
 from src.main.events.storage import Store
 from src.main.events.adapters import parse, DONKI_KINDS
 

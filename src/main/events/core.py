@@ -3,36 +3,9 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import math
 
-UTC = timezone.utc
+from src.main.utils import UTC, dt, iso, now, number
 VERSION = '1.0.0'
 MECHANISMS = ('radiation', 'geomagnetic', 'communications', 'tracked_debris', 'meteoroids')
-
-
-def dt(value, provider=False):
-    if isinstance(value, datetime):
-        result = value
-    else:
-        result = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-    if result.tzinfo is None:
-        if not provider:
-            raise ValueError('Timestamp must contain Z or a UTC offset')
-        result = result.replace(tzinfo=UTC)
-    return result.astimezone(UTC)
-
-
-def iso(value):
-    return dt(value).isoformat().replace('+00:00', 'Z')
-
-
-def now():
-    return datetime.now(UTC)
-
-
-def number(value):
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError('Non-finite number')
-    return result
 
 
 def event(eid, kind, mechanism, start, end, source, record, *, basis='observation',

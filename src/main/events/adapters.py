@@ -3,7 +3,8 @@ import csv
 import io
 import re
 from datetime import timedelta, datetime
-from src.main.events.core import dt, iso, event, number
+from src.main.utils import dt, iso, number
+from src.main.events.core import event
 
 DONKI_KINDS = {'FLR': ('solar_flare', 'communications', 'flrID', 'beginTime'),
  'SEP': ('solar_particle_event', 'radiation', 'sepID', 'eventTime'),

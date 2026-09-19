@@ -6,7 +6,8 @@ import logging
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
-from src.main.events.core import now, iso, assess
+from src.main.utils import now, iso
+from src.main.events.core import assess
 from src.main.events.service import config_load, run
 from src.main.events.storage import Store
 
@@ -79,7 +80,7 @@ def main():
     if args.command == 'serve':
         return serve(config,args.host,args.port)
     if args.command == 'demo':
-        from src.main.events.demo import make_demo
+        from src.main.demo import make_demo
         result = make_demo(config)
     elif args.command == 'replay':
         result = Store(config['database']).run(args.run_id)

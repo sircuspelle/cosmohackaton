@@ -5,11 +5,12 @@ from unittest.mock import patch
 import json
 from contextlib import closing
 from datetime import timedelta
-from src.main.events.core import dt, iso, now, event, assess, union_minutes, validate_query, group_count
+from src.main.utils import dt, iso, now
+from src.main.events.core import event, assess, union_minutes, validate_query, group_count
 from src.main.events.adapters import socrates, donki, kp, goes, jpl
 from src.main.events.service import DEFAULT_CONFIG, collect
 from src.main.events.storage import Store
-from src.main.events.demo import make_demo
+from src.main.demo import make_demo
 
 SRC = dict(name='test',url='https://example.invalid',snapshot_id='test',fetched_at='2024-05-10T09:00:00Z')
 Q = dict(start='2024-05-10T12:00:00Z',duration_hours=6,search_hours=0,mode='reconstruction')
