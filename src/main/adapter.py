@@ -340,7 +340,8 @@ class SpaceDataAdapter:
     # ==================================================================
 
     def fetch_iss_tle(self, as_of: datetime | None = None, *,
-                      replay_mode: str = 'as_of') -> TLERecord | None:
+                      replay_mode: str = 'as_of',
+                      reconstruction_end: datetime | None = None) -> TLERecord | None:
         if as_of is not None:
             validate_mode(replay_mode)
             client = self.celestrak or CelesTrakClient()
@@ -353,7 +354,9 @@ class SpaceDataAdapter:
             except Exception as exc:
                 logger.warning('[REPLAY] CelesTrak archive: %s', exc)
                 rows = []
-            selected = self._select_historical_tle(rows, as_of, replay_mode, 'celestrak_gp_history')
+            selected = self._select_historical_tle(
+                rows, as_of, replay_mode, 'celestrak_gp_history', reconstruction_end
+            )
             if selected:
                 return selected
             # Same eligibility rules apply to fallback caches.
@@ -363,7 +366,9 @@ class SpaceDataAdapter:
                 rows = [rows] if isinstance(rows, dict) else rows
             except (OSError, ValueError, AttributeError):
                 rows = []
-            return self._select_historical_tle(rows, as_of, replay_mode, 'file_cache')
+            return self._select_historical_tle(
+                rows, as_of, replay_mode, 'file_cache', reconstruction_end
+            )
 
         # РЕАЛЬНОЕ ВРЕМЯ — пробуем источники по приоритету
         rec = self._try_celestrak_gp_json()
@@ -436,18 +441,22 @@ class SpaceDataAdapter:
         norad = int(line1[2:7])
         if int(line2[2:7]) != norad:
             raise ValueError('TLE object IDs differ')
+        retrieved = row.get('fetched_at') or row.get('cached_at')
         return TLERecord(row.get('OBJECT_NAME', row.get('name', 'ISS (ZARYA)')),
             line1, line2, epoch, norad, source,
-            utc(row['fetched_at']) if row.get('fetched_at') else None)
+            utc(retrieved) if retrieved else None)
 
-    def _select_historical_tle(self, rows, as_of, mode, source):
+    def _select_historical_tle(self, rows, as_of, mode, source, end=None):
         cutoff = utc(as_of)
+        upper = utc(end) if end is not None and mode == 'reconstruction' else None
         eligible = []
         for row in rows:
             try:
                 record = self._tle_from_row(row, source)
                 age = cutoff - record.epoch
                 if record.norad_id != self.iss_norad_id or not timedelta(0) <= age <= timedelta(days=1):
+                    continue
+                if upper is not None and record.epoch > upper:
                     continue
                 if mode == 'as_of' and not known_at(row, cutoff):
                     continue
@@ -494,14 +503,11 @@ class SpaceDataAdapter:
             return None
         try:
             data = json.loads(self.tle_cache_path.read_text(encoding="utf-8"))
-            return TLERecord(
-                name=data["tle"]["name"],
-                line1=data["tle"]["line1"],
-                line2=data["tle"]["line2"],
-                epoch=datetime.fromisoformat(data["cached_at"]),
-                norad_id=self.iss_norad_id,
-                source="file_cache",
-            )
+            rows = data.get(str(self.iss_norad_id), [])
+            rows = [rows] if isinstance(rows, dict) else rows
+            records = [self._tle_from_row(row, row.get("source", "file_cache"))
+                       for row in rows]
+            return max(records, key=lambda record: record.epoch) if records else None
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
@@ -553,7 +559,11 @@ class SpaceDataAdapter:
 
         ctx.protons = self.fetch_protons(energy=energy, as_of=as_of, replay_mode=replay_mode, end=reconstruction_end)
         ctx.kp = self.fetch_kp(as_of=as_of, replay_mode=replay_mode, end=reconstruction_end)
-        ctx.iss_tle = self.fetch_iss_tle(as_of=as_of, replay_mode=replay_mode)
+        ctx.iss_tle = self.fetch_iss_tle(
+            as_of=as_of,
+            replay_mode=replay_mode,
+            reconstruction_end=reconstruction_end,
+        )
         ctx.sep_events = self.fetch_sep_events(sep_days_back, as_of=as_of)
 
         ctx.conjunctions = self.fetch_conjunctions(max_conj_range_km, max_conj_days_ahead, as_of)

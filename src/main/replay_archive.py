@@ -12,20 +12,6 @@ START = datetime(2024, 5, 1)
 END = datetime(2024, 7, 1)
 LOG = logging.getLogger(__name__)
 
-# Минимальный встроенный smoke-набор нужен только для запуска тестов из
-# неполной рабочей копии. В поставке архивы лежат в data/conditions/.
-_FALLBACK_ROWS = {
-    'protons': [
-        {'time_tag': '2024-06-15T12:00:00Z', 'energy': '>=10 MeV',
-         'flux': 4, 'available_at': '2024-06-15T13:00:00Z'},
-    ],
-    'kp': [
-        {'time_tag': '2024-06-15T09:00:00Z', 'end_time': '2024-06-15T12:00:00Z',
-         'kp': 6, 'available_at': '2024-06-15T12:15:00Z'},
-    ],
-}
-
-
 def utc(value):
     if isinstance(value, str):
         value = datetime.fromisoformat(value.replace('Z', '+00:00'))
@@ -76,9 +62,6 @@ def weather_rows(directory, kind, as_of, mode='as_of', end=None):
     if not path.exists() and path.with_suffix('.json.gz').exists():
         path = path.with_suffix('.json.gz')
     rows = read_rows(path)
-    if not rows and not path.exists():
-        LOG.warning('Using embedded replay smoke data for missing %s archive', kind)
-        rows = _FALLBACK_ROWS.get(kind, [])
     selected = []
     for row in rows:
         try:
