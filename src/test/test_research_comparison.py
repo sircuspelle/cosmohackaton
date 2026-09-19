@@ -11,8 +11,8 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from src.main.events.core import assess, event, iso
-from src.main.events.demo import make_demo
+from src.main.core import assess, event, iso
+from src.main.demo import make_demo
 from src.main.events.service import DEFAULT_CONFIG
 from src.main.events.adapters import goes, kp, donki, socrates
 from src.main.conditions.debris import (

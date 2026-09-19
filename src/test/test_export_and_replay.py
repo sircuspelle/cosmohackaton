@@ -14,11 +14,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.main.events.core import assess, event, iso, now
-from src.main.events.demo import make_demo
+from src.main.core import assess, event, iso, now
+from src.main.demo import make_demo
 from src.main.events.service import DEFAULT_CONFIG
 from src.main.events.storage import Store
-from src.main.events.app import main as app_main
+from src.main.app import main as app_main
 from src.main.window_comparator import WindowComparator
 from src.main.window import Window
 from src.main.events_adapter import (
@@ -286,7 +286,7 @@ class TestOfflineAndCacheReproducibility(unittest.TestCase):
             store._save_snapshot('https://example.invalid/y',
                                  '2024-05-10T14:00:00Z', '[]', '{}')
             # cutoff = 12:00 → должен вернуться только снапшот 10:00
-            from src.main.events.core import dt
+            from src.main.core import dt
             got = store.last('https://example.invalid/y',
                              dt('2024-05-10T12:00:00Z'))
             self.assertEqual(got['fetched_at'], '2024-05-10T10:00:00Z')

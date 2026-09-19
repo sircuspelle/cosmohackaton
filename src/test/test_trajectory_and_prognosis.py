@@ -11,7 +11,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
-from src.main.events.core import assess, event, iso, MECHANISMS
+from src.main.core import assess, event, iso, MECHANISMS
 from src.main.events.service import DEFAULT_CONFIG, collect
 from src.main.events.storage import Store
 from src.main.events.adapters import donki, kp, goes, socrates
@@ -234,11 +234,11 @@ class TestWindowContainsTrajectoryMetrics(unittest.TestCase):
     def test_search_window_up_to_24h(self):
         # search_hours = 24 допустимо
         q = {**Q, 'search_hours': 24}
-        from src.main.events.core import validate_query
+        from src.main.core import validate_query
         validate_query(q)  # не должно бросить
 
     def test_search_window_25h_rejected(self):
-        from src.main.events.core import validate_query
+        from src.main.core import validate_query
         with self.assertRaises(ValueError):
             validate_query({**Q, 'search_hours': 25})
 
