@@ -1,0 +1,6 @@
+# Core adapter dependency (optional fallback to urllib is built in)
+requests>=2.31
+# Required only for orbit/illumination/thermal/communication calculations
+skyfield>=1.49
+numpy>=1.24
+pytest>=8.0
