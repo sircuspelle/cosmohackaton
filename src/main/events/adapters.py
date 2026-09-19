@@ -82,7 +82,7 @@ def donki(data, src, kind, config):
         )
         relevance = (
             "context_only"
-            if kind in ("CME", "MPC", "RBE")
+            if kind in ("CME", "MPC")
             else "earth_environment_proxy"
         )
         values = {"instruments": instruments}
@@ -121,7 +121,16 @@ def donki(data, src, kind, config):
                 ],
             )
         )
-    return out, [], []
+    coverage = []
+    for e in out:
+        if e["end"] and e["temporal"] == "interval":
+            coverage.append({
+                "mechanism": e["mechanism"],
+                "start": e["start"],
+                "end": e["end"],
+                "fetched_at": e["fetched_at"],
+            })
+    return out, coverage, []
 
 
 def kp(data, src, config):

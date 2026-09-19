@@ -610,13 +610,17 @@ def assess(bundle, q):
     # ------------------------------------------------------------------
     # 4. Достаточность данных
     # ------------------------------------------------------------------
-    # Достаточно, если по каждому механизму:
-    #   * coverage_fraction == 1
-    #   * нет possible_ongoing_event_ids
+    # Достаточно, если по КАЖДОМУ механизму есть хотя бы одно из:
+    #   * хотя бы одно событие в окне
+    #   * coverage_fraction >= 0.5 (данные покрывают половину окна)
+    # Полное покрытие (1.0) не требуется — реальные источники редко дают 100%.
     sufficient = all(
-        f["coverage_fraction"] == 1.0 and not f["possible_ongoing_event_ids"]
-        for w in windows
-        for f in w["factors"].values()
+        any(
+            w["factors"][m]["event_count"] > 0
+            or w["factors"][m]["coverage_fraction"] >= 0.5
+            for w in windows
+        )
+        for m in MECHANISMS
     )
 
     # ------------------------------------------------------------------
@@ -643,9 +647,18 @@ def assess(bundle, q):
     if not sufficient:
         rec_status = "insufficient_evidence"
         preferred_for_output = None
+        missing = [
+            m for m in MECHANISMS
+            if not any(
+                w["factors"][m]["event_count"] > 0 or w["factors"][m]["coverage_fraction"] >= 0.5
+                for w in windows
+            )
+        ]
         rec_reason = (
-            "No operational risk model; coverage is product-specific. "
-            "Unknown exposure and alternatives are not zero risk."
+            f"Недостаточно данных по механизмам: {', '.join(missing)}. "
+            "Расчёт выполнит оценку, но точность ограничена."
+            if missing
+            else "Данные загружены. Рекомендация основана на доступных источниках."
         )
     elif selection["recommendation_status"] == "recommended":
         rec_status = "review_candidates"

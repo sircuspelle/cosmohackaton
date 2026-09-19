@@ -3,54 +3,8 @@ const state = {
   selected: 0,
 };
 
-const demoResult = {
-  query: {
-    start: "2024-05-10T12:00:00Z",
-    duration_hours: 6,
-    mode: "reconstruction",
-  },
-  generated_at: new Date().toISOString(),
-  windows: [],
-  events: [],
-  sources: [],
-  limitations: [
-    "Результат не загрузился. Проверьте доступность result.json.",
-  ],
-  recommendation: {
-    status: "insufficient_evidence",
-    reason: "Нет результата расчёта.",
-  },
-};
-
-async function loadResult() {
-  try {
-    const response = await fetch("../result.json", {
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      throw new Error("result.json unavailable");
-    }
-
-    state.result = await response.json();
-
-    document.querySelector("#sourceState").textContent =
-      "Результат загружен";
-  } catch (error) {
-    state.result = demoResult;
-
-    document.querySelector("#sourceState").textContent =
-      "Нет файла результата";
-  }
-
-  render(state.result);
-}
-
 function formatDate(value) {
-  if (!value) {
-    return "—";
-  }
-
+  if (!value) return "—";
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "short",
@@ -67,7 +21,6 @@ function mechanismName(name) {
     tracked_debris: "Сближения",
     meteoroids: "Микрометеороиды",
   };
-
   return names[name] || name;
 }
 
@@ -79,13 +32,17 @@ function statusText(status) {
     events_and_missing_data: "События и пробелы",
     no_detected_events: "События не обнаружены",
     insufficient_data: "Недостаточно данных",
+    ok: "Норма",
   };
-
   return statuses[status] || status || "Неизвестно";
 }
 
-function factorCoverage(factor) {
-  return Math.round((factor?.coverage_fraction || 0) * 100);
+function factorScore(factor) {
+  const events = factor?.event_count || 0;
+  const overlap = factor?.known_interval_overlap_minutes || 0;
+  if (events === 0 && overlap === 0) return { pct: 0, label: "Нет событий" };
+  const score = Math.min(100, Math.round((overlap / 360) * 100));
+  return { pct: score, label: `${events}соб. / ${overlap}мин` };
 }
 
 function render(result) {
@@ -109,27 +66,13 @@ function render(result) {
       ? `${result.exclusions_after_cutoff} исключено`
       : "Отсечки нет";
 
-  const recommendation = document.querySelector(
-    "#recommendationContent"
-  );
-
+  const recommendation = document.querySelector("#recommendationContent");
   recommendation.className = "";
-
   recommendation.innerHTML = `
     <h2>${statusText(result.recommendation?.status)}</h2>
-    <p>
-      ${result.recommendation?.reason ||
-    "Результат готов к проверке."
-    }
-    </p>
+    <p>${result.recommendation?.reason || "Результат готов к проверке."}</p>
     ${preferred
-      ? `
-          <div class="recommendation-time">
-            ${formatDate(preferred.start)}
-            —
-            ${formatDate(preferred.end)}
-          </div>
-        `
+      ? `<div class="recommendation-time">${formatDate(preferred.start)} — ${formatDate(preferred.end)}</div>`
       : ""
     }
   `;
@@ -137,126 +80,71 @@ function render(result) {
   document.querySelector("#windowsGrid").innerHTML =
     windows.length
       ? windows
-        .map((window, index) => {
-          const factors = Object.entries(window.factors || {});
+          .map((window, index) => {
+            const factors = Object.entries(window.factors || {});
+            const hasEvents = factors.some(([, f]) => (f.event_count || 0) > 0);
+            const incomplete = factors.some(
+              ([, f]) => f.status?.includes("missing") || f.status === "insufficient_data"
+            );
 
-          const hasEvents = factors.some(
-            ([, factor]) => (factor.event_count || 0) > 0
-          );
+            const pill = incomplete
+              ? ["Проверить", "risk-review"]
+              : hasEvents
+                ? ["Есть события", "risk-review"]
+                : ["Данных достаточно", "risk-good"];
 
-          const incomplete = factors.some(
-            ([, factor]) =>
-              factor.status?.includes("missing") ||
-              factor.status === "insufficient_data"
-          );
-
-          const pill = incomplete
-            ? ["Проверить", "risk-review"]
-            : hasEvents
-              ? ["Есть события", "risk-review"]
-              : ["Данных достаточно", "risk-good"];
-
-          return `
-              <article
-                class="window-card ${index === state.selected ? "selected" : ""
-            }"
-                data-index="${index}"
-              >
+            return `
+              <article class="window-card ${index === state.selected ? "selected" : ""}" data-index="${index}">
                 <div class="window-top">
-                  <span class="window-index">
-                    ОКНО ${String(index + 1).padStart(2, "0")}
-                  </span>
-
-                  <span class="risk-pill ${pill[1]}">
-                    ${pill[0]}
-                  </span>
+                  <span class="window-index">ОКНО ${String(index + 1).padStart(2, "0")}</span>
+                  <span class="risk-pill ${pill[1]}">${pill[0]}</span>
                 </div>
-
                 <div class="window-time">
-                  ${formatDate(window.start)}
-                  —
-                  ${formatDate(window.end)}
+                  ${formatDate(window.start)} — ${formatDate(window.end)}
                 </div>
+                ${factors.slice(0, 3).map(([name, factor]) => {
+                  const s = factorScore(factor);
+                  return `
+                    <div class="factor-mini">
+                      <span>${mechanismName(name)}</span>
+                      <div class="bar"><i style="width: ${Math.max(5, s.pct)}%"></i></div>
+                      <span>${s.pct}%</span>
+                    </div>`;
+                }).join("")}
+              </article>`;
+          })
+          .join("")
+      : `<div class="window-card"><strong>Нет доступных окон</strong><p class="muted">Проверьте входные данные.</p></div>`;
 
-                ${factors
-              .slice(0, 3)
-              .map(
-                ([name, factor]) => `
-                      <div class="factor-mini">
-                        <span>${mechanismName(name)}</span>
-
-                        <div class="bar">
-                          <i
-                            style="
-                              width: ${Math.max(
-                  5,
-                  factorCoverage(factor)
-                )}%
-                            "
-                          ></i>
-                        </div>
-
-                        <span>${factorCoverage(factor)}%</span>
-                      </div>
-                    `
-              )
-              .join("")}
-              </article>
-            `;
-        })
-        .join("")
-      : `
-        <div class="window-card">
-          <strong>Нет доступных окон</strong>
-          <p class="muted">
-            Проверьте входные данные и архивы.
-          </p>
-        </div>
-      `;
-
-  document
-    .querySelectorAll(".window-card[data-index]")
-    .forEach((card) => {
-      card.addEventListener("click", () => {
-        state.selected = Number(card.dataset.index);
-        render(result);
-      });
+  document.querySelectorAll(".window-card[data-index]").forEach((card) => {
+    card.addEventListener("click", () => {
+      state.selected = Number(card.dataset.index);
+      render(result);
     });
+  });
 
   const selected = windows[state.selected] || windows[0];
   const factors = selected?.factors || {};
 
   document.querySelector("#factorList").innerHTML =
     Object.entries(factors)
-      .map(
-        ([name, factor]) => `
+      .map(([name, factor]) => {
+        const s = factorScore(factor);
+        return `
           <div class="factor-row">
             <div>
-              <div class="factor-name">
-                ${mechanismName(name)}
-              </div>
-
+              <div class="factor-name">${mechanismName(name)}</div>
               <div class="factor-meta">
-                ${factor.event_count || 0} событий ·
-                ${factor.known_interval_overlap_minutes || 0
-          } мин перекрытия
+                ${factor.event_count || 0} событий · ${factor.known_interval_overlap_minutes || 0} мин перекрытия
               </div>
             </div>
-
             <div class="status-label">
               ${statusText(factor.status)}
-              <br />
-              ${factorCoverage(factor)}% покрытия
+              <br />${s.label}
             </div>
-          </div>
-        `
-      )
-      .join("") ||
-    `
-      <p class="muted">
-        Факторы не переданы.
-      </p>
-    `;
+          </div>`;
+      })
+      .join("") || `<p class="muted">Факторы не переданы.</p>`;
 
   document.querySelector("#sourceList").innerHTML =
     (result.sources || [])
@@ -264,95 +152,87 @@ function render(result) {
         (source) => `
           <div class="source-row">
             <div>
-              <div class="source-name">
-                ${source.name || "Источник"}
-              </div>
-
+              <div class="source-name">${source.name || "Источник"}</div>
               <div class="source-meta">
-                ${source.fetched_at
-            ? formatDate(source.fetched_at)
-            : "время неизвестно"
-          }
+                ${source.fetched_at ? formatDate(source.fetched_at) : "время неизвестно"}
               </div>
             </div>
-
             <div class="status-label">
               ${source.status || "без статуса"}
-              <br />
-              ${source.event_count ?? 0} событий
+              <br />${source.event_count ?? source.context_count ?? 0} событий
             </div>
-          </div>
-        `
+          </div>`
       )
-      .join("") ||
-    `
-      <p class="muted">
-        Источники не переданы.
-      </p>
-    `;
+      .join("") || `<p class="muted">Источники не переданы.</p>`;
 
   document.querySelector("#limitationsList").innerHTML =
     (result.limitations || [])
       .map((item) => `<li>${item}</li>`)
-      .join("") ||
-    "<li>Ограничения не указаны.</li>";
+      .join("") || "<li>Ограничения не указаны.</li>";
 }
 
-document
-  .querySelector("#reloadButton")
-  .addEventListener("click", loadResult);
+function setLoading() {
+  document.querySelector("#recommendationContent").innerHTML =
+    `<h2>Ожидание расчёта</h2><p>Введите параметры и нажмите «Оценить окна».</p>`;
+  document.querySelector("#windowsGrid").innerHTML =
+    `<div class="window-card"><p class="muted">Результаты появятся после расчёта.</p></div>`;
+  document.querySelector("#factorList").innerHTML =
+    `<p class="muted">Нет данных.</p>`;
+  document.querySelector("#sourceList").innerHTML =
+    `<p class="muted">Нет данных.</p>`;
+  document.querySelector("#limitationsList").innerHTML =
+    `<li>Ограничения не указаны.</li>`;
+  document.querySelector("#eventCount").textContent = "—";
+  document.querySelector("#sourceCount").textContent = "—";
+  document.querySelector("#windowCount").textContent = "";
+  document.querySelector("#generatedAt").textContent = "";
+  document.querySelector("#coverageText").textContent = "";
+}
 
-document
-  .querySelector("#assessButton")
-  .addEventListener("click", () => {
-    const start = document.querySelector("#startInput").value;
-    const duration = document.querySelector("#durationInput").value;
-    const mode = document.querySelector("#modeInput").value;
+function assess() {
+  const start = document.querySelector("#startInput").value;
+  const duration = document.querySelector("#durationInput").value;
+  const mode = document.querySelector("#modeInput").value;
 
-    const query = {
-      start: start
-        ? new Date(start).toISOString()
-        : new Date().toISOString(),
-      duration_hours: Number(duration),
-      search_hours: 6,
-      step_minutes: 60,
-      mode,
-    };
+  const query = {
+    start: start ? new Date(start).toISOString() : new Date().toISOString(),
+    duration_hours: Number(duration),
+    search_hours: 6,
+    step_minutes: 60,
+    mode,
+  };
 
-    document.querySelector("#sourceState").textContent =
-      "Расчёт выполняется…";
+  const btn = document.querySelector("#assessButton");
+  btn.disabled = true;
+  btn.textContent = "Расчёт…";
+  document.querySelector("#sourceState").textContent = "Расчёт выполняется…";
 
-    fetch(
-      window.EVA_API_URL ||
-      "http://127.0.0.1:8000/assess",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(query),
-      }
-    )
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
+  fetch("/assess", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(query),
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((result) => {
+      state.selected = 0;
+      state.result = result;
+      document.querySelector("#sourceState").textContent = "Расчёт завершён";
+      render(result);
+    })
+    .catch((err) => {
+      document.querySelector("#sourceState").textContent =
+        `Ошибка: ${err.message}`;
+    })
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerHTML = "Оценить окна <span>→</span>";
+    });
+}
 
-        return response.json();
-      })
-      .then((result) => {
-        state.selected = 0;
-        state.result = result;
+document.querySelector("#assessButton").addEventListener("click", assess);
+document.querySelector("#reloadButton").addEventListener("click", assess);
 
-        document.querySelector("#sourceState").textContent =
-          "Расчёт завершён";
-
-        render(result);
-      })
-      .catch(() => {
-        document.querySelector("#sourceState").textContent =
-          "API недоступен: показан последний результат";
-      });
-  });
-
-loadResult();
+setLoading();

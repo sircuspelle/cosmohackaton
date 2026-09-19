@@ -26,6 +26,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./front:/usr/share/nginx/html:ro
     depends_on:
       server:
         condition: service_healthy

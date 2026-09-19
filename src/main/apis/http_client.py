@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import time
@@ -128,6 +129,8 @@ class HttpClient:
             content = resp.raw.read(self.max_bytes + 1)
             if len(content) > self.max_bytes:
                 raise HttpClientError(f"Response exceeds {self.max_bytes} bytes: {url}")
+            if content[:2] == b'\x1f\x8b':
+                content = gzip.decompress(content)
             return content.decode("utf-8-sig")
         except _requests.exceptions.HTTPError as exc:
             raise HttpClientError(str(exc), status_code=exc.response.status_code if exc.response else None) from exc
@@ -142,6 +145,8 @@ class HttpClient:
                 raw = response.read(self.max_bytes + 1)
                 if len(raw) > self.max_bytes:
                     raise HttpClientError(f"Response exceeds {self.max_bytes} bytes: {url}")
+                if raw[:2] == b'\x1f\x8b':
+                    raw = gzip.decompress(raw)
                 return raw.decode("utf-8-sig")
         except HTTPError as exc:
             raise HttpClientError(str(exc), status_code=exc.code) from exc

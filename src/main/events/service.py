@@ -77,6 +77,10 @@ def specs(q, config):
         # SOCRATES — URL из CelesTrakClient
         from src.main.apis.celestrak_client import URL_SOCRATES
         add('socrates', URL_SOCRATES, config['ttl_socrates_seconds'], 'csv')
+    else:
+        # В режиме reconstruction NOAA протоны нужны для радиации
+        from src.main.apis.noaa_client import URL_PROTONS
+        add('noaa_protons', URL_PROTONS, config['ttl_noaa_seconds'])
 
     # JPL — URL строится через JplClient.build_url()
     if mode != 'as_of':
