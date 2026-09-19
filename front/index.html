@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="EVA Risk Assessor — оценка окон выхода в открытый космос" />
+    <title>EVA Risk Assessor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">✦</span><span>EVA <b>Risk Assessor</b></span></div>
+        <div class="system-state"><span class="state-dot"></span><span id="sourceState">Данные загружаются</span></div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">EVA PLANNING CONSOLE</p>
+            <h1>Выберите окно работы<br /><em>с опорой на данные.</em></h1>
+            <p class="hero-copy">Космическая погода, радиация, геомагнитная обстановка и сближения — в одном сравнении.</p>
+          </div>
+          <div class="hero-orbit" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="planet">ISS</span></div>
+        </section>
+
+        <section class="control-panel panel">
+          <div class="panel-heading"><div><span class="section-kicker">01 / ЗАПРОС</span><h2>Параметры миссии</h2></div><button class="ghost-button" id="reloadButton">↻ Обновить данные</button></div>
+          <div class="controls-grid">
+            <label>Начало сеанса<input id="startInput" type="datetime-local" value="2024-05-10T12:00" /></label>
+            <label>Длительность<select id="durationInput"><option value="2">2 часа</option><option value="4">4 часа</option><option value="6" selected>6 часов</option><option value="8">8 часов</option></select></label>
+            <label>Режим данных<select id="modeInput"><option value="reconstruction" selected>Историческая реконструкция</option><option value="live">Текущие данные</option><option value="as_of">Строгий replay</option></select></label>
+            <button class="primary-button" id="assessButton">Оценить окна <span>→</span></button>
+          </div>
+        </section>
+
+        <section class="summary-grid" id="summarySection">
+          <article class="recommendation panel"><div class="section-kicker">02 / РЕШЕНИЕ</div><div id="recommendationContent" class="loading">Загрузка результата…</div></article>
+          <article class="snapshot panel"><div class="section-kicker">СОСТОЯНИЕ ДАННЫХ</div><div class="snapshot-number" id="eventCount">—</div><p>событий учтено</p><div class="snapshot-meta"><span id="sourceCount">— источников</span><span id="coverageText">Покрытие —</span></div></article>
+        </section>
+
+        <section class="windows-section"><div class="section-heading"><div><span class="section-kicker">03 / СРАВНЕНИЕ</span><h2>Доступные окна</h2></div><span class="muted" id="windowCount"></span></div><div class="windows-grid" id="windowsGrid"></div></section>
+
+        <section class="details-grid">
+          <article class="panel detail-panel"><div class="section-heading compact"><div><span class="section-kicker">ФАКТОРЫ</span><h2>Что влияет на выбор</h2></div></div><div id="factorList"></div></article>
+          <article class="panel detail-panel"><div class="section-heading compact"><div><span class="section-kicker">ИСТОЧНИКИ</span><h2>Надёжность сведений</h2></div></div><div id="sourceList"></div></article>
+        </section>
+
+        <section class="limitations panel"><div class="section-heading compact"><div><span class="section-kicker">ОГРАНИЧЕНИЯ</span><h2>Что важно учитывать</h2></div></div><ul id="limitationsList"></ul></section>
+      </main>
+      <footer><span>EVA Risk Assessor</span><span id="generatedAt">—</span></footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
