@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any, Mapping, Sequence, Optional
 
-from data.window import Window
+from src.main.window import Window
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,9 @@ class WindowComparator:
     """Ранжирует окна по объяснимому взвешенному риску."""
 
     DEFAULT_WEIGHTS = {"debris": 1.4, "meteoroid": 1.4, "protons": 1.2,
-                       "thermal": 1.0, "illumination": 0.8, "communication": 0.6}
+                       "thermal": 1.0, "illumination": 0.8, "communication": 0.6,
+                       "tracked_debris": 1.4, "radiation": 1.2,
+                       "geomagnetic": 1.0, "communications": 0.6, "meteoroids": 1.4}
 
     @classmethod
     def compare(

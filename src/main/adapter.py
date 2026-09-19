@@ -6,12 +6,12 @@
 Поддерживает ИСТОРИЧЕСКИЙ РЕЖИМ (Replay) через параметр `as_of`.
 Если `as_of` задан, адаптер переключается на архивные эндпоинты
 (Space-Track для орбит, архивы NOAA) и игнорирует текущие данные.
+
+Все HTTP-запросы делегируются клиентам из пакета `src.main.apis`.
 """
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import logging
 import math
@@ -20,21 +20,24 @@ from datetime import datetime, timezone as _tz, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
-try:
-    import requests
-except ImportError:  # requests is optional; the adapter remains importable offline
-    requests = None
-from urllib.request import Request, urlopen
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Импорты внутренних классов (предполагаем, что они лежат рядом)
+# Импорты клиентов API (единственное место для сетевых запросов)
+# ---------------------------------------------------------------------------
+from src.main.apis.http_client import HttpClientError
+from src.main.apis.noaa_client import NoaaClient
+from src.main.apis.celestrak_client import CelesTrakClient
+from src.main.apis.donki_client import DonkiClient
+from src.main.apis.wheretheiss_client import WhereTheIssClient
+from src.main.apis.spacetrack_client import SpaceTrackClient
+
+# ---------------------------------------------------------------------------
+# Импорты внутренних классов
 # ---------------------------------------------------------------------------
 try:
-    from data.conditions.protons import ProtonPoint
+    from src.main.conditions.protons import ProtonPoint
 except ImportError:
-    # Фолбэк на случай, если структура папок отличается
     @dataclass
     class ProtonPoint:
         time: datetime
@@ -60,14 +63,10 @@ class Conjunction:
 # ---------------------------------------------------------------------------
 
 ISS_NORAD_ID = 25544
-TIMEOUT = (5, 15)  # (connect, read)
 
 # Кэши
-TLE_CACHE_PATH = Path("tle_cache.json")
+TLE_CACHE_PATH = Path("data/conditions/tle_cache.json")
 TLE_CACHE_TTL = timedelta(hours=6)
-
-# Публичный источник TLE без ключа (только для текущего времени!)
-WHERE_THE_ISS_AT_URL = "https://api.wheretheiss.at/v1/satellites/{norad}/tles"
 
 
 # ---------------------------------------------------------------------------
@@ -141,18 +140,38 @@ class SpaceWeatherContext:
 # ---------------------------------------------------------------------------
 
 class SpaceDataAdapter:
-    def __init__(self,
-                 noaa=None,
-                 celestrak=None,
-                 donki=None,
-                 spacetrack=None,
-                 iss_norad_id: int = ISS_NORAD_ID,
-                 tle_cache_path: Path = TLE_CACHE_PATH,
-                 tle_cache_ttl: timedelta = TLE_CACHE_TTL):
+    """
+    Сводит данные из нескольких внешних API в единый SpaceWeatherContext.
+
+    Параметры:
+        noaa        — клиент NOAA SWPC (NoaaClient)
+        celestrak   — клиент CelesTrak (CelesTrakClient)
+        donki       — клиент NASA DONKI (DonkiClient)
+        spacetrack  — клиент Space-Track (SpaceTrackClient); нужен только для Replay
+        wheretheiss — клиент wheretheiss.at (WhereTheIssClient); fallback-источник TLE
+        iss_norad_id   — NORAD ID МКС
+        tle_cache_path — путь к файловому кэшу TLE
+        tle_cache_ttl  — TTL файлового кэша
+
+    Все HTTP-запросы выполняются внутри клиентов из пакета `apis`.
+    """
+
+    def __init__(
+        self,
+        noaa: Optional[NoaaClient] = None,
+        celestrak: Optional[CelesTrakClient] = None,
+        donki: Optional[DonkiClient] = None,
+        spacetrack: Optional[SpaceTrackClient] = None,
+        wheretheiss: Optional[WhereTheIssClient] = None,
+        iss_norad_id: int = ISS_NORAD_ID,
+        tle_cache_path: Path = TLE_CACHE_PATH,
+        tle_cache_ttl: timedelta = TLE_CACHE_TTL,
+    ):
         self.noaa = noaa
         self.celestrak = celestrak
         self.donki = donki
         self.spacetrack = spacetrack
+        self.wheretheiss = wheretheiss
         self.iss_norad_id = iss_norad_id
         self.tle_cache_path = tle_cache_path
         self.tle_cache_ttl = tle_cache_ttl
@@ -165,10 +184,8 @@ class SpaceDataAdapter:
         # Если исторический режим
         if _is_older_than(as_of, timedelta(days=2)):
             logger.info("[REPLAY] Запрос архивных протонов на %s", as_of)
-            # Здесь в идеале дергаем self.noaa.get_historical_netcdf или грузим из локального дампа
-            # Для демо хакатона можно загрузить локальный json
             try:
-                with open("archive_protons_may2024.json", "r") as f:
+                with open("data/conditions/archive_protons_may2024.json", "r") as f:
                     raw = json.load(f)
                 return self._parse_protons(raw, energy)
             except FileNotFoundError:
@@ -178,7 +195,11 @@ class SpaceDataAdapter:
         # Режим реального времени
         if not self.noaa:
             return []
-        raw = self.noaa.get_current_protons()
+        try:
+            raw = self.noaa.get_current_protons()
+        except HttpClientError as e:
+            logger.warning("NOAA protons: %s", e)
+            return []
         return self._parse_protons(raw, energy=energy)
 
     @staticmethod
@@ -199,23 +220,32 @@ class SpaceDataAdapter:
         return points
 
     # ==================================================================
-    # Сближения (SOCRATES)
+    # Сближения (SOCRATES через CelesTrakClient)
     # ==================================================================
 
-    def fetch_conjunctions(self, max_range_km: float = 100.0, max_days_ahead: int = 7,
-                           as_of: Optional[datetime] = None) -> List[Conjunction]:
+    def fetch_conjunctions(
+        self,
+        max_range_km: float = 100.0,
+        max_days_ahead: int = 7,
+        as_of: Optional[datetime] = None,
+    ) -> List[Conjunction]:
         if _is_older_than(as_of, timedelta(days=7)):
-            logger.warning("[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом симулируются или пропускаются.")
-            return []  # SOCRATES не отдает архивы по API, на хакатоне это ок
+            logger.warning("[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом пропускаются.")
+            return []
 
         if not self.celestrak:
             return []
 
         try:
-            raw = self.celestrak.get_socrates_conjunctions_for_iss()  # Возвращает List[Dict] из CSV
+            # CelesTrakClient.get_socrates_conjunctions_for_iss() → сырая CSV-строка
+            raw_csv = self.celestrak.get_socrates_conjunctions_for_iss()
         except Exception as e:
             logger.warning("SOCRATES: %s", e)
             return []
+
+        import csv
+        import io
+        raw = list(csv.DictReader(io.StringIO(raw_csv)))
 
         conjunctions = []
         current_time = _now(as_of)
@@ -234,7 +264,6 @@ class SpaceDataAdapter:
                 except ValueError:
                     continue
 
-            # Отсекаем сближения за пределами нашего горизонта прогноза
             if tca_dt > limit_dt.replace(tzinfo=_tz.utc) or tca_dt < current_time.replace(tzinfo=_tz.utc):
                 continue
 
@@ -253,10 +282,9 @@ class SpaceDataAdapter:
                 tca=_to_naive_utc(tca_dt),
                 distance_km=dist,
                 object_id=threat_id,
-                relative_speed_km_s=float(row.get('TCA_RELATIVE_SPEED', 0.0) or 0.0)
+                relative_speed_km_s=float(row.get('TCA_RELATIVE_SPEED', 0.0) or 0.0),
             ))
 
-        # Сортируем по времени сближения
         conjunctions.sort(key=lambda x: x.tca)
         return conjunctions
 
@@ -271,31 +299,36 @@ class SpaceDataAdapter:
         is_historical = _is_older_than(as_of, timedelta(days=2))
 
         if is_historical:
-            logger.info("[REPLAY] Поиск орбиты на эпоху %s", as_of)
-            # 1. Попытка достать из Space-Track GP_HISTORY
             if self.spacetrack:
-                # реализация вызова к Space-Track...
-                pass
-            logger.warning("[REPLAY] Исторический TLE недоступен: современная орбита не подменяет архивную.")
+                try:
+                    row = self.spacetrack.get_tle_at(self.iss_norad_id, as_of)
+                    if row: return self._tle_from_row(row, "spacetrack")
+                except Exception as e: logger.warning("[REPLAY] Space-Track: %s", e)
+            cached = self._find_tle_for_epoch(self.iss_norad_id, as_of)
+            if cached and abs((cached.epoch - _to_naive_utc(as_of)).total_seconds()) < 86400: return cached
             return None
 
-        # РЕАЛЬНОЕ ВРЕМЯ
+        # РЕАЛЬНОЕ ВРЕМЯ — пробуем источники по приоритету
         rec = self._try_celestrak_gp_json()
-        if rec: return rec
+        if rec:
+            return rec
 
         rec = self._try_wheretheiss()
-        if rec: return rec
+        if rec:
+            return rec
 
         return self._load_tle_cache(ignore_ttl=True)
 
     def _try_celestrak_gp_json(self) -> Optional[TLERecord]:
-        if not self.celestrak: return None
+        if not self.celestrak:
+            return None
         try:
             raw = self.celestrak.get_current_iss_orbit()
         except Exception as e:
             logger.warning("CelesTrak GP JSON Error: %s", e)
             return None
-        if not raw: return None
+        if not raw:
+            return None
         row = raw[0]
 
         line1 = row.get('TLE_LINE1') or row.get('LINE1')
@@ -305,21 +338,21 @@ class SpaceDataAdapter:
             return TLERecord(
                 name=row.get('OBJECT_NAME', 'ISS (ZARYA)').strip(),
                 line1=line1.strip(), line2=line2.strip(),
-                epoch=epoch, norad_id=int(row.get('NORAD_CAT_ID', self.iss_norad_id)),
+                epoch=epoch,
+                norad_id=int(row.get('NORAD_CAT_ID', self.iss_norad_id)),
+                source="celestrak",
+                retrieved_at=datetime.now(_tz.utc),
             )
         return None
 
     def _try_wheretheiss(self) -> Optional[TLERecord]:
-        url = WHERE_THE_ISS_AT_URL.format(norad=self.iss_norad_id)
+        """Fallback-источник TLE: wheretheiss.at через WhereTheIssClient."""
+        client = self.wheretheiss
+        if client is None:
+            # Создаём клиент на лету как fallback
+            client = WhereTheIssClient()
         try:
-            if requests is not None:
-                r = requests.get(url, timeout=TIMEOUT, headers={"User-Agent": "EVA-Risk-Assessor/1.0"})
-                r.raise_for_status()
-                data = r.json()
-            else:
-                req = Request(url, headers={"User-Agent": "EVA-Risk-Assessor/1.0"})
-                with urlopen(req, timeout=TIMEOUT[1]) as response:
-                    data = json.loads(response.read().decode("utf-8"))
+            data = client.get_tle(self.iss_norad_id)
             return TLERecord(
                 name="ISS (ZARYA)",
                 line1=data['line1'].strip(),
@@ -333,8 +366,22 @@ class SpaceDataAdapter:
             logger.warning("wheretheiss.at Error: %s", e)
             return None
 
-    def _load_tle_cache(self, ignore_ttl: bool = False) -> Optional[TLERecord]:
+    def _tle_from_row(self, row, source):
+        return TLERecord(row.get("OBJECT_NAME", "ISS (ZARYA)"), row.get("TLE_LINE1") or row.get("LINE1"), row.get("TLE_LINE2") or row.get("LINE2"), _to_naive_utc(_parse_utc(row["EPOCH"])), int(row.get("NORAD_CAT_ID", self.iss_norad_id)), source, datetime.now(_tz.utc))
+    def _find_tle_for_epoch(self, norad_id, as_of):
         if not self.tle_cache_path.exists(): return None
+        try:
+            raw=json.loads(self.tle_cache_path.read_text()); rows=raw.get(str(norad_id), raw.get("tle", [])); rows=[rows] if isinstance(rows,dict) else rows
+            parsed=[self._tle_from_row(r,r.get("source","file_cache")) for r in rows]; parsed=[r for r in parsed if r.epoch <= _to_naive_utc(as_of)]
+            return max(parsed,key=lambda r:r.epoch) if parsed else None
+        except Exception: return None
+    def _save_tle_to_cache(self, rec):
+        self.tle_cache_path.parent.mkdir(parents=True,exist_ok=True); raw=json.loads(self.tle_cache_path.read_text()) if self.tle_cache_path.exists() else {}; rows=raw.get(str(rec.norad_id),[]); rows=[rows] if isinstance(rows,dict) else rows
+        rows=[r for r in rows if r.get("epoch") != rec.epoch.isoformat()]; rows.append({"epoch":rec.epoch.isoformat(),"line1":rec.line1,"line2":rec.line2,"name":rec.name,"norad_id":rec.norad_id,"source":rec.source,"cached_at":datetime.now(_tz.utc).isoformat()}); raw[str(rec.norad_id)]=sorted(rows,key=lambda r:r["epoch"])[-1000:]; self.tle_cache_path.write_text(json.dumps(raw,indent=2))
+
+    def _load_tle_cache(self, ignore_ttl: bool = False) -> Optional[TLERecord]:
+        if not self.tle_cache_path.exists():
+            return None
         try:
             data = json.loads(self.tle_cache_path.read_text(encoding="utf-8"))
             return TLERecord(
@@ -343,6 +390,7 @@ class SpaceDataAdapter:
                 line2=data["tle"]["line2"],
                 epoch=datetime.fromisoformat(data["cached_at"]),
                 norad_id=self.iss_norad_id,
+                source="file_cache",
             )
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             return None
@@ -367,12 +415,14 @@ class SpaceDataAdapter:
     # Сводный контекст
     # ==================================================================
 
-    def build_context(self,
-                      as_of: Optional[datetime] = None,
-                      energy: str = '>=10 MeV',
-                      max_conj_range_km: float = 100.0,
-                      max_conj_days_ahead: int = 7,
-                      sep_days_back: int = 7) -> SpaceWeatherContext:
+    def build_context(
+        self,
+        as_of: Optional[datetime] = None,
+        energy: str = '>=10 MeV',
+        max_conj_range_km: float = 100.0,
+        max_conj_days_ahead: int = 7,
+        sep_days_back: int = 7,
+    ) -> SpaceWeatherContext:
         """
         Собирает всё в один объект.
         Если передан `as_of`, собирает исторические данные (Replay).
@@ -400,19 +450,17 @@ class SpaceDataAdapter:
     # ==================================================================
 
     @staticmethod
-    def build_window_from_context(ctx: SpaceWeatherContext,
-                                  window_id: str = "WKD-AUTO",
-                                  duration_min: int = 90,
-                                  align_to_now: bool = False):
+    def build_window_from_context(
+        ctx: SpaceWeatherContext,
+        window_id: str = "WKD-AUTO",
+        duration_min: int = 90,
+        align_to_now: bool = False,
+    ):
+        from src.main.window import Window
 
-        # Локальный импорт чтобы избежать циклических зависимостей
-        from window import Window
-
-        # Если задан alignment или нет протонов, берем точку отсчета контекста (now или as_of)
         if align_to_now or not ctx.protons:
             start = ctx.fetched_at.replace(second=0, microsecond=0)
         else:
-            # Иначе берем по первой точке реальных измерений (полезно для симуляций)
             start = ctx.protons[0].time
             if start.tzinfo is not None:
                 start = start.astimezone(_tz.utc).replace(tzinfo=None)

@@ -1,0 +1,11 @@
+{
+  "database": "data/events/eva.sqlite3",
+  "timeout_seconds": 20,
+  "retry_count": 1,
+  "workers": 4,
+  "kp_event_threshold": 5,
+  "conjunction_buffer_minutes": 30,
+  "norad_id": 25544,
+  "lookback_days": 7,
+  "disabled_sources": []
+}
