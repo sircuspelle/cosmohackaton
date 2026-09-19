@@ -1,6 +1,6 @@
 """Synthetic fixtures, deliberately labelled; never used on provider failure."""
 from src.main.events.adapters import donki, kp, socrates
-from src.main.events.core import assess
+from src.main.core import assess
 
 
 def make_demo(config):

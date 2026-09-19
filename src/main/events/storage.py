@@ -12,7 +12,7 @@ import sqlite3
 import time
 from pathlib import Path
 from contextlib import closing
-from src.main.utils import now, iso, dt
+from src.main.core import now, iso, dt
 from src.main.apis.http_client import HttpClient, HttpClientError
 
 

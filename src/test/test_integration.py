@@ -8,7 +8,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from src.main.events.core import assess
+from src.main.core import assess
 from src.main.demo import make_demo
 from src.main.events.service import DEFAULT_CONFIG
 from src.main.events_adapter import (
@@ -36,8 +36,7 @@ def _demo_assess():
 
 def _simple_assess(events=None, coverage=None):
     """Минимальный assess() с контролируемыми событиями."""
-    from src.main.events.core import event as mk_event
-    from src.main.utils import iso
+    from src.main.core import event as mk_event, iso
 
     src = dict(
         name='test', url='https://example.invalid',

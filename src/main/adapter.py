@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Адаптер между внешними API (NOAA, CelesTrak, NASA DONKI, Space-Track)
 и внутренними классами калькуляторов.
@@ -16,21 +15,22 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone as _tz, timedelta
+from datetime import datetime, timedelta
+from datetime import timezone as _tz
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Импорты клиентов API (единственное место для сетевых запросов)
 # ---------------------------------------------------------------------------
-from src.main.apis.http_client import HttpClientError
-from src.main.apis.noaa_client import NoaaClient
 from src.main.apis.celestrak_client import CelesTrakClient
 from src.main.apis.donki_client import DonkiClient
-from src.main.apis.wheretheiss_client import WhereTheIssClient
+from src.main.apis.http_client import HttpClientError
+from src.main.apis.noaa_client import NoaaClient
 from src.main.apis.spacetrack_client import SpaceTrackClient
+from src.main.apis.wheretheiss_client import WhereTheIssClient
 
 # ---------------------------------------------------------------------------
 # Импорты внутренних классов
@@ -38,20 +38,22 @@ from src.main.apis.spacetrack_client import SpaceTrackClient
 try:
     from src.main.conditions.protons import ProtonPoint
 except ImportError:
+
     @dataclass
     class ProtonPoint:
         time: datetime
         flux: float
-        lat_deg: Optional[float] = None
-        lon_deg: Optional[float] = None
-        alt_km: Optional[float] = None
-        mag_lat_deg: Optional[float] = None
-        l_shell: Optional[float] = None
+        lat_deg: float | None = None
+        lon_deg: float | None = None
+        alt_km: float | None = None
+        mag_lat_deg: float | None = None
+        l_shell: float | None = None
 
 
 @dataclass
 class Conjunction:
     """Опасное сближение"""
+
     tca: datetime
     distance_km: float
     object_id: str
@@ -73,16 +75,17 @@ TLE_CACHE_TTL = timedelta(hours=6)
 # Хелперы времени и парсинга
 # ---------------------------------------------------------------------------
 
+
 def _parse_utc(s: str) -> datetime:
     if s is None:
         raise ValueError("Empty datetime string")
-    s = s.strip().replace('Z', '+00:00')
-    if ' ' in s and 'T' not in s:
-        s = s.replace(' ', 'T')
+    s = s.strip().replace("Z", "+00:00")
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T")
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:
-        dt = datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
+        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
 
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_tz.utc)
@@ -95,20 +98,21 @@ def _to_naive_utc(dt: datetime) -> datetime:
     return dt.astimezone(_tz.utc).replace(tzinfo=None)
 
 
-def _now(as_of: Optional[datetime] = None) -> datetime:
+def _now(as_of: datetime | None = None) -> datetime:
     """Возвращает `as_of`, если задан (исторический режим), иначе текущее UTC время."""
     if as_of is None:
         return datetime.utcnow()
     return _to_naive_utc(as_of)
 
 
-def _is_older_than(as_of: Optional[datetime], delta: timedelta) -> bool:
+def _is_older_than(as_of: datetime | None, delta: timedelta) -> bool:
     return as_of is not None and datetime.utcnow() - _now(as_of) > delta
 
 
 # ---------------------------------------------------------------------------
 # Контейнеры данных
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TLERecord:
@@ -118,17 +122,17 @@ class TLERecord:
     epoch: datetime
     norad_id: int
     source: str = "unknown"
-    retrieved_at: Optional[datetime] = None
+    retrieved_at: datetime | None = None
 
 
 @dataclass
 class SpaceWeatherContext:
-    protons: List[ProtonPoint] = field(default_factory=list)
-    conjunctions: List[Conjunction] = field(default_factory=list)
-    iss_tle: Optional[TLERecord] = None
-    alerts: List[Dict[str, Any]] = field(default_factory=list)
-    sep_events: List[Dict[str, Any]] = field(default_factory=list)
-    fetched_at: Optional[datetime] = None
+    protons: list[ProtonPoint] = field(default_factory=list)
+    conjunctions: list[Conjunction] = field(default_factory=list)
+    iss_tle: TLERecord | None = None
+    alerts: list[dict[str, Any]] = field(default_factory=list)
+    sep_events: list[dict[str, Any]] = field(default_factory=list)
+    fetched_at: datetime | None = None
     is_historical: bool = False
 
     def is_ready(self) -> bool:
@@ -138,6 +142,7 @@ class SpaceWeatherContext:
 # ---------------------------------------------------------------------------
 # Адаптер
 # ---------------------------------------------------------------------------
+
 
 class SpaceDataAdapter:
     """
@@ -158,11 +163,11 @@ class SpaceDataAdapter:
 
     def __init__(
         self,
-        noaa: Optional[NoaaClient] = None,
-        celestrak: Optional[CelesTrakClient] = None,
-        donki: Optional[DonkiClient] = None,
-        spacetrack: Optional[SpaceTrackClient] = None,
-        wheretheiss: Optional[WhereTheIssClient] = None,
+        noaa: NoaaClient | None = None,
+        celestrak: CelesTrakClient | None = None,
+        donki: DonkiClient | None = None,
+        spacetrack: SpaceTrackClient | None = None,
+        wheretheiss: WhereTheIssClient | None = None,
         iss_norad_id: int = ISS_NORAD_ID,
         tle_cache_path: Path = TLE_CACHE_PATH,
         tle_cache_ttl: timedelta = TLE_CACHE_TTL,
@@ -180,7 +185,9 @@ class SpaceDataAdapter:
     # Протоны (NOAA GOES)
     # ==================================================================
 
-    def fetch_protons(self, energy: str = '>=10 MeV', as_of: Optional[datetime] = None) -> List[ProtonPoint]:
+    def fetch_protons(
+        self, energy: str = ">=10 MeV", as_of: datetime | None = None
+    ) -> list[ProtonPoint]:
         # Если исторический режим
         if _is_older_than(as_of, timedelta(days=2)):
             logger.info("[REPLAY] Запрос архивных протонов на %s", as_of)
@@ -189,7 +196,9 @@ class SpaceDataAdapter:
                     raw = json.load(f)
                 return self._parse_protons(raw, energy)
             except FileNotFoundError:
-                logger.warning("[REPLAY] Архив протонов не найден. Требуется NCEI парсер.")
+                logger.warning(
+                    "[REPLAY] Архив протонов не найден. Требуется NCEI парсер."
+                )
                 return []
 
         # Режим реального времени
@@ -203,14 +212,14 @@ class SpaceDataAdapter:
         return self._parse_protons(raw, energy=energy)
 
     @staticmethod
-    def _parse_protons(raw: List[Dict], energy: str = '>=10 MeV') -> List[ProtonPoint]:
-        points: List[ProtonPoint] = []
+    def _parse_protons(raw: list[dict], energy: str = ">=10 MeV") -> list[ProtonPoint]:
+        points: list[ProtonPoint] = []
         for row in raw:
-            if row.get('energy') != energy:
+            if row.get("energy") != energy:
                 continue
             try:
-                t = _to_naive_utc(_parse_utc(row['time_tag']))
-                flux = float(row['flux'])
+                t = _to_naive_utc(_parse_utc(row["time_tag"]))
+                flux = float(row["flux"])
             except (KeyError, ValueError, TypeError):
                 continue
             if not math.isfinite(flux) or flux < 0:
@@ -227,10 +236,12 @@ class SpaceDataAdapter:
         self,
         max_range_km: float = 100.0,
         max_days_ahead: int = 7,
-        as_of: Optional[datetime] = None,
-    ) -> List[Conjunction]:
+        as_of: datetime | None = None,
+    ) -> list[Conjunction]:
         if _is_older_than(as_of, timedelta(days=7)):
-            logger.warning("[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом пропускаются.")
+            logger.warning(
+                "[REPLAY] SOCRATES не хранит архивы. Сближения в прошлом пропускаются."
+            )
             return []
 
         if not self.celestrak:
@@ -245,6 +256,7 @@ class SpaceDataAdapter:
 
         import csv
         import io
+
         raw = list(csv.DictReader(io.StringIO(raw_csv)))
 
         conjunctions = []
@@ -252,38 +264,48 @@ class SpaceDataAdapter:
         limit_dt = current_time + timedelta(days=max_days_ahead)
 
         for row in raw:
-            tca_str = row.get('TCA', '').strip()
+            tca_str = row.get("TCA", "").strip()
             if not tca_str:
                 continue
 
             try:
-                tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=_tz.utc)
+                tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S.%f").replace(
+                    tzinfo=_tz.utc
+                )
             except ValueError:
                 try:
-                    tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+                    tca_dt = datetime.strptime(tca_str, "%Y-%m-%d %H:%M:%S").replace(
+                        tzinfo=_tz.utc
+                    )
                 except ValueError:
                     continue
 
-            if tca_dt > limit_dt.replace(tzinfo=_tz.utc) or tca_dt < current_time.replace(tzinfo=_tz.utc):
+            if tca_dt > limit_dt.replace(
+                tzinfo=_tz.utc
+            ) or tca_dt < current_time.replace(tzinfo=_tz.utc):
                 continue
 
             try:
-                dist = float(row.get('TCA_RANGE', 999.0))
+                dist = float(row.get("TCA_RANGE", 999.0))
             except (TypeError, ValueError):
                 continue
             if dist > max_range_km:
                 continue
 
-            id1 = str(row.get('NORAD_CAT_ID_1', '')).strip()
-            id2 = str(row.get('NORAD_CAT_ID_2', '')).strip()
+            id1 = str(row.get("NORAD_CAT_ID_1", "")).strip()
+            id2 = str(row.get("NORAD_CAT_ID_2", "")).strip()
             threat_id = id2 if id1 == str(self.iss_norad_id) else id1
 
-            conjunctions.append(Conjunction(
-                tca=_to_naive_utc(tca_dt),
-                distance_km=dist,
-                object_id=threat_id,
-                relative_speed_km_s=float(row.get('TCA_RELATIVE_SPEED', 0.0) or 0.0),
-            ))
+            conjunctions.append(
+                Conjunction(
+                    tca=_to_naive_utc(tca_dt),
+                    distance_km=dist,
+                    object_id=threat_id,
+                    relative_speed_km_s=float(
+                        row.get("TCA_RELATIVE_SPEED", 0.0) or 0.0
+                    ),
+                )
+            )
 
         conjunctions.sort(key=lambda x: x.tca)
         return conjunctions
@@ -292,20 +314,26 @@ class SpaceDataAdapter:
     # TLE МКС
     # ==================================================================
 
-    def fetch_iss_tle(self, as_of: Optional[datetime] = None) -> Optional[TLERecord]:
+    def fetch_iss_tle(self, as_of: datetime | None = None) -> TLERecord | None:
         """
         Умный выбор источника орбиты в зависимости от режима (Текущий или Исторический).
         """
         is_historical = _is_older_than(as_of, timedelta(days=2))
 
         if is_historical:
-            logger.info("[REPLAY] Поиск орбиты на эпоху %s", as_of)
             if self.spacetrack:
                 try:
-                    self.spacetrack.get_historical_tle(self.iss_norad_id, as_of)
-                except NotImplementedError as e:
-                    logger.warning("[REPLAY] %s", e)
-            logger.warning("[REPLAY] Исторический TLE недоступен: современная орбита не подменяет архивную.")
+                    row = self.spacetrack.get_tle_at(self.iss_norad_id, as_of)
+                    if row:
+                        return self._tle_from_row(row, "spacetrack")
+                except Exception as e:
+                    logger.warning("[REPLAY] Space-Track: %s", e)
+            cached = self._find_tle_for_epoch(self.iss_norad_id, as_of)
+            if (
+                cached
+                and abs((cached.epoch - _to_naive_utc(as_of)).total_seconds()) < 86400
+            ):
+                return cached
             return None
 
         # РЕАЛЬНОЕ ВРЕМЯ — пробуем источники по приоритету
@@ -319,7 +347,7 @@ class SpaceDataAdapter:
 
         return self._load_tle_cache(ignore_ttl=True)
 
-    def _try_celestrak_gp_json(self) -> Optional[TLERecord]:
+    def _try_celestrak_gp_json(self) -> TLERecord | None:
         if not self.celestrak:
             return None
         try:
@@ -331,21 +359,22 @@ class SpaceDataAdapter:
             return None
         row = raw[0]
 
-        line1 = row.get('TLE_LINE1') or row.get('LINE1')
-        line2 = row.get('TLE_LINE2') or row.get('LINE2')
+        line1 = row.get("TLE_LINE1") or row.get("LINE1")
+        line2 = row.get("TLE_LINE2") or row.get("LINE2")
         if line1 and line2:
-            epoch = _to_naive_utc(_parse_utc(row.get('EPOCH', '')))
+            epoch = _to_naive_utc(_parse_utc(row.get("EPOCH", "")))
             return TLERecord(
-                name=row.get('OBJECT_NAME', 'ISS (ZARYA)').strip(),
-                line1=line1.strip(), line2=line2.strip(),
+                name=row.get("OBJECT_NAME", "ISS (ZARYA)").strip(),
+                line1=line1.strip(),
+                line2=line2.strip(),
                 epoch=epoch,
-                norad_id=int(row.get('NORAD_CAT_ID', self.iss_norad_id)),
+                norad_id=int(row.get("NORAD_CAT_ID", self.iss_norad_id)),
                 source="celestrak",
                 retrieved_at=datetime.now(_tz.utc),
             )
         return None
 
-    def _try_wheretheiss(self) -> Optional[TLERecord]:
+    def _try_wheretheiss(self) -> TLERecord | None:
         """Fallback-источник TLE: wheretheiss.at через WhereTheIssClient."""
         client = self.wheretheiss
         if client is None:
@@ -355,8 +384,8 @@ class SpaceDataAdapter:
             data = client.get_tle(self.iss_norad_id)
             return TLERecord(
                 name="ISS (ZARYA)",
-                line1=data['line1'].strip(),
-                line2=data['line2'].strip(),
+                line1=data["line1"].strip(),
+                line2=data["line2"].strip(),
                 epoch=datetime.utcnow(),
                 norad_id=self.iss_norad_id,
                 source="wheretheiss.at",
@@ -366,7 +395,57 @@ class SpaceDataAdapter:
             logger.warning("wheretheiss.at Error: %s", e)
             return None
 
-    def _load_tle_cache(self, ignore_ttl: bool = False) -> Optional[TLERecord]:
+    def _tle_from_row(self, row, source):
+        return TLERecord(
+            row.get("OBJECT_NAME", "ISS (ZARYA)"),
+            row.get("TLE_LINE1") or row.get("LINE1"),
+            row.get("TLE_LINE2") or row.get("LINE2"),
+            _to_naive_utc(_parse_utc(row["EPOCH"])),
+            int(row.get("NORAD_CAT_ID", self.iss_norad_id)),
+            source,
+            datetime.now(_tz.utc),
+        )
+
+    def _find_tle_for_epoch(self, norad_id, as_of):
+        if not self.tle_cache_path.exists():
+            return None
+        try:
+            raw = json.loads(self.tle_cache_path.read_text())
+            rows = raw.get(str(norad_id), raw.get("tle", []))
+            rows = [rows] if isinstance(rows, dict) else rows
+            parsed = [
+                self._tle_from_row(r, r.get("source", "file_cache")) for r in rows
+            ]
+            parsed = [r for r in parsed if r.epoch <= _to_naive_utc(as_of)]
+            return max(parsed, key=lambda r: r.epoch) if parsed else None
+        except Exception:
+            return None
+
+    def _save_tle_to_cache(self, rec):
+        self.tle_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        raw = (
+            json.loads(self.tle_cache_path.read_text())
+            if self.tle_cache_path.exists()
+            else {}
+        )
+        rows = raw.get(str(rec.norad_id), [])
+        rows = [rows] if isinstance(rows, dict) else rows
+        rows = [r for r in rows if r.get("epoch") != rec.epoch.isoformat()]
+        rows.append(
+            {
+                "epoch": rec.epoch.isoformat(),
+                "line1": rec.line1,
+                "line2": rec.line2,
+                "name": rec.name,
+                "norad_id": rec.norad_id,
+                "source": rec.source,
+                "cached_at": datetime.now(_tz.utc).isoformat(),
+            }
+        )
+        raw[str(rec.norad_id)] = sorted(rows, key=lambda r: r["epoch"])[-1000:]
+        self.tle_cache_path.write_text(json.dumps(raw, indent=2))
+
+    def _load_tle_cache(self, ignore_ttl: bool = False) -> TLERecord | None:
         if not self.tle_cache_path.exists():
             return None
         try:
@@ -386,7 +465,9 @@ class SpaceDataAdapter:
     # NASA DONKI (SEP)
     # ==================================================================
 
-    def fetch_sep_events(self, days_back: int = 7, as_of: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    def fetch_sep_events(
+        self, days_back: int = 7, as_of: datetime | None = None
+    ) -> list[dict[str, Any]]:
         if not self.donki:
             return []
         end = _now(as_of).date()
@@ -404,8 +485,8 @@ class SpaceDataAdapter:
 
     def build_context(
         self,
-        as_of: Optional[datetime] = None,
-        energy: str = '>=10 MeV',
+        as_of: datetime | None = None,
+        energy: str = ">=10 MeV",
         max_conj_range_km: float = 100.0,
         max_conj_days_ahead: int = 7,
         sep_days_back: int = 7,

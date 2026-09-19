@@ -5,8 +5,7 @@ from unittest.mock import patch
 import json
 from contextlib import closing
 from datetime import timedelta
-from src.main.utils import dt, iso, now
-from src.main.events.core import event, assess, union_minutes, validate_query, group_count
+from src.main.core import dt, iso, now, event, assess, union_minutes, validate_query, group_count
 from src.main.events.adapters import socrates, donki, kp, goes, jpl
 from src.main.events.service import DEFAULT_CONFIG, collect
 from src.main.events.storage import Store

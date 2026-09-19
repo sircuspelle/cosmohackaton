@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from src.main.utils import dt, iso, now
+from src.main.core import dt, iso, now
 from src.main.events.adapters import donki, kp, goes, noaa_date, alerts, parse, socrates, jpl
 from src.main.events.service import config_load, collect, run, DEFAULT_CONFIG
 from src.main.events.storage import Store
