@@ -1,15 +1,19 @@
-from datetime import datetime, timezone
 import unittest
+from datetime import datetime, timezone
 
-from data.window import Window
 from data.window_comparator import WindowComparator
+
 from data.conditions.debris import DebrisCalculator, DebrisObservation, MeteoroidSample
+from data.window import Window
 
 
 class TestWindowAndComparator(unittest.TestCase):
     def test_window_normalizes_utc_and_rejects_invalid_duration(self):
-        w = Window("a", datetime(2024, 5, 1, 12, tzinfo=timezone.utc),
-                   datetime(2024, 5, 1, 13, 30, tzinfo=timezone.utc))
+        w = Window(
+            "a",
+            datetime(2024, 5, 1, 12, tzinfo=timezone.utc),
+            datetime(2024, 5, 1, 13, 30, tzinfo=timezone.utc),
+        )
         self.assertIsNone(w.start.tzinfo)
         self.assertEqual(w.duration_minutes, 90)
         with self.assertRaises(ValueError):
@@ -31,8 +35,18 @@ class TestWindowAndComparator(unittest.TestCase):
         b = Window("b", datetime(2024, 5, 1, 14), datetime(2024, 5, 1, 15))
         result = WindowComparator.compare(
             [a, b],
-            {"a": {"debris": type("R", (), {"risk_score": 10, "data_coverage_pct": 100})()},
-             "b": {"debris": type("R", (), {"risk_score": 50, "data_coverage_pct": 100})()}},
+            {
+                "a": {
+                    "debris": type(
+                        "R", (), {"risk_score": 10, "data_coverage_pct": 100}
+                    )()
+                },
+                "b": {
+                    "debris": type(
+                        "R", (), {"risk_score": 50, "data_coverage_pct": 100}
+                    )()
+                },
+            },
         )
         self.assertEqual(result.preferred_window_id, "a")
         self.assertIn("Минимальный", result.reason)
